@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Upload Order CSV</title>
+</head>
+<body>
+  <h2>Test Upload Order</h2>
+
+  <input type="file" id="csvFile" accept=".csv" />
+  <button onclick="uploadOrder()">Upload</button>
+
+  <pre id="result"></pre>
+    
+  <script>
+    function parseCSV(csvText) {
+      const lines = csvText.split("\n");
+      const headers = lines[0].split(",").map(h => h.trim());
+      const row = lines[1].split(",");
+      const order = {};
+
+      headers.forEach((h, idx) => {
+        let val = row[idx]?.trim();
+        // Convert JSON fields
+        if (h === "items") {
+          val = JSON.parse(val);
+        } else if (!isNaN(val)) {
+          val = Number(val);
+        }
+        order[h] = val;
+      });
+      return order;
+    }
+
+    async function uploadOrder() {
+      const file = document.getElementById("csvFile").files[0];
+      if (!file) return alert("Chọn file CSV!");
+
+      const text = await file.text();
+      const order = parseCSV(text);
+
+      const response = await fetch("http://localhost:8080/orders", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(order)
+      });
+
+      const resultText = await response.text();
+      document.getElementById("result").textContent = resultText;
+    }
+  </script>
+
+</body>
+</html>
