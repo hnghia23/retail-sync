@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 import mysql.connector
-from adapters.mysql_repo import MySQLOrderRepository
-from use_cases.place_order import PlaceOrder
-from api.order_router import setup_routes
+from pos_service.adapters.mysql_repo import MySQLOrderRepository
+from pos_service.use_cases.place_order import PlaceOrder
+from pos_service.api.order_router import setup_routes
 
 app = FastAPI()
 
