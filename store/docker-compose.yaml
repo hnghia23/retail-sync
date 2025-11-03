@@ -14,7 +14,7 @@ services:
       - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
-      - ./init:/docker-entrypoint-initdb.d
+      - ./init/mysql:/docker-entrypoint-initdb.d
 
   cache:
     image: redis:6.2-alpine
@@ -34,9 +34,10 @@ services:
       POSTGRES_PASSWORD: admin123
       POSTGRES_DB: my_database
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init/postgres:/docker-entrypoint-initdb.d
 
 volumes:
   mysql_data:
