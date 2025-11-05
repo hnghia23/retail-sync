@@ -7,11 +7,11 @@ from .order_item import OrderItem
 class Order:
     transaction_id: int
     employee_id: int
-    customer_id: int
+    customer_id: str
     created_at: datetime
     items: List[OrderItem] = field(default_factory=list)
     
-    total_amount: float = 0.0
+    total_amount: int = 0.0
     discount: float = 0.0
     final_amount: float = 0.0
     payment_method: str = "CASH"

@@ -1,0 +1,10 @@
+[
+    {
+        "mysql_conn_id_airflow": "mysql_pos_connection",
+        "store_name": "store-1"
+    },
+    {
+        "mysql_conn_id_airflow": "mysql_pos_connection",
+        "store_name": "store-2"
+    }
+]

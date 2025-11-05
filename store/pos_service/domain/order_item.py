@@ -4,8 +4,8 @@ from dataclasses import dataclass
 class OrderItem:
     product_id: str
     quantity: int
-    unit_price: float
+    unit_price: int
     
     @property
-    def total_price(self) -> float:
+    def total_price(self) -> int:
         return self.quantity * self.unit_price

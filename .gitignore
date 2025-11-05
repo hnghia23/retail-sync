@@ -1,0 +1,6 @@
+/crawl_data/products/*
+/crawl_data/store_info/*
+.env
+main.ipynb
+/store/pos_service/__pycache__
+/store/pos_service/*/__pycache__/**
