@@ -132,15 +132,18 @@ services:
         /entrypoint.sh clickhouse-server &
         pid=$!;
         sleep 5;
-        if [ ! -f /var/lib/clickhouse/.init_done ]; then
-          echo '🔹 Running initial schema...';
-          clickhouse-client --multiquery < /docker-entrypoint-initdb.d/dw_schema.sql &&
-          touch /var/lib/clickhouse/.init_done;
+
+        # Kiểm tra xem DB 'dw' có tồn tại không
+        if clickhouse-client --query=\"EXISTS DATABASE dw\" | grep -q 1; then
+          echo '✅ Database dw already exists, skipping schema initialization...';
         else
-          echo '✅ Schema already initialized, skipping...';
+          echo '🔹 Database dw not found, running schema initialization...';
+          clickhouse-client --multiquery < /docker-entrypoint-initdb.d/dw_schema.sql;
         fi;
+
         wait $pid
       "
+
 
 volumes:
   postgres-db-volume: 
