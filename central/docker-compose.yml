@@ -131,34 +131,25 @@ services:
       "
 
   clickhouse:
-    image: clickhouse/clickhouse-server:23.10
-    container_name: central_warehouse
-    ulimits:
+    image: clickhouse/clickhouse-server:24.8 
+    container_name: clickhouse
+    restart: always
+    ports:
+      - "8123:8123"   # HTTP interface (dùng cho ClickHouse client, Airflow, etc.)
+      - "9002:9000"   # Native TCP interface (dùng cho clickhouse-client)
+      - "9009:9009"   # Optional: inter-server communication port
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: clickhouse_password
+    volumes:
+      - ./data/clickhouse:/var/lib/clickhouse
+      - ./logs/clickhouse:/var/log/clickhouse-server
+      - ./init/clickhouse:/docker-entrypoint-initdb.d
+    ulimits:       # cần thiết để tránh lỗi open files
       nofile:
         soft: 262144
         hard: 262144
-    volumes:
-      - ./data/clickhouse:/var/lib/clickhouse
-      - ./init/clickhouse:/docker-entrypoint-initdb.d
-    ports:
-      - "8123:8123"
-      - "9002:9000"
-    command: >
-      bash -c "
-        /entrypoint.sh clickhouse-server &
-        pid=$!;
-        sleep 5;
 
-        # Kiểm tra xem DB 'dw' có tồn tại không
-        if clickhouse-client --query=\"EXISTS DATABASE dw\" | grep -q 1; then
-          echo '✅ Database dw already exists, skipping schema initialization...';
-        else
-          echo '🔹 Database dw not found, running schema initialization...';
-          clickhouse-client --multiquery < /docker-entrypoint-initdb.d/dw_schema.sql;
-        fi;
-
-        wait $pid
-      "
 
 
 volumes:
