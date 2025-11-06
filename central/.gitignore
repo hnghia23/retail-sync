@@ -1,7 +1,8 @@
 /central/data/
 /central/data/*
-*/central/data/**
 __pycache__/
 *.pyc
 tmp/
 .env
+/data/*
+/logs/*

@@ -36,6 +36,7 @@ def extract_transactions(pos_config):
     bucket = "pos"
     s3_key = f"staging/{pos_config['store_name']}/{today_date}/transactions.parquet"
     s3_hook.load_file(filename=trans_path, key=s3_key, bucket_name=bucket, replace=True)
+    
     os.remove(trans_path)
 
     # Trả danh sách transaction_id để task kế tiếp dùng
@@ -134,7 +135,7 @@ default_args = {
 with DAG(
     dag_id="ingest_to_lake",
     default_args=default_args,
-    schedule_interval="@daily",
+    schedule_interval="@weekly",
     catchup=False,
     tags=["pos", "data-lake"],
 ) as dag:
