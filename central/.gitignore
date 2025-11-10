@@ -6,3 +6,4 @@ tmp/
 .env
 /data/*
 /logs/*
+/central/scripts/output/*

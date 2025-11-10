@@ -1,0 +1,6 @@
+﻿transaction_id,employee_id,customer_id,created_at,payment_method,discount,final_amount,point_changed,product_id_1,quantity_1,product_id_2,quantity_2,product_id_3,quantity_3
+1,5,0901234567,2025-10-28 09:30:00,cash,0.00,560000,56,OEMNGD1673,1,THE001,1,,
+2,5,0902345678,2025-10-29 10:15:00,card,5.00,980000,98,OEMST661,1,SC_F2024,2,,
+3,5,0903456789,2025-10-30 14:20:00,e-wallet,0.00,450000,45,OEMMD945,1,OEMTM421,3,,
+4,5,0904567890,2025-10-31 18:05:00,cash,10.00,1500000,150,ERKLT080-10,1,OEMKS224,1,OEMST716,2.0
+5,5,0905678901,2025-11-01 11:10:00,card,0.00,320000,32,BS101,2,SC_MS1947,1,,

@@ -79,20 +79,20 @@ def load_pos_to_dw():
         """
         Ghi dữ liệu vào ClickHouse sử dụng clickhouse_connect
         """
-        # 1️⃣ Kết nối ClickHouse
+        # Kết nối ClickHouse
         client = clickhouse_connect.get_client(
             host='clickhouse',         # nếu Airflow chạy cùng network với ClickHouse => đổi thành 'clickhouse'
             port=8123,
             username='default',
             password='clickhouse_password',
-            database='dw'             # nếu bạn có DB 'dw', thêm dòng này
+            database='dw'           
         )
 
-        # 2️⃣ Đọc file parquet
+        # Đọc file parquet
         df = pd.read_parquet(fact_path)
         records = df.to_dict(orient="records")
 
-        # 3️⃣ Chuẩn bị dữ liệu insert
+        # Chuẩn bị dữ liệu insert
         rows = []
         for r in records:
             date_key = int(r["created_at"].strftime("%Y%m%d"))
