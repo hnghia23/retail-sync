@@ -10,8 +10,8 @@ CREATE TABLE employee (
     id INT PRIMARY KEY, 
     employee_name VARCHAR(255) NOT NULL,
     position VARCHAR(50),
-    start_date DATETIME NOT NULL,   -- dùng DATETIME thay vì DATE
-    retire_date DATETIME,
+    start_date DATE NOT NULL,   -- dùng DATETIME thay vì DATE
+    retire_date DATE,
     salary INT NOT NULL
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

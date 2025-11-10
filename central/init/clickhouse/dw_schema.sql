@@ -16,7 +16,7 @@ CREATE TABLE dim_store
     store_name String,
     address String,
     city String,
-    manager_id UInt32,
+    manager_id UInt8,
     open_date Date,
     close_date Nullable(Date),
     is_active UInt8 DEFAULT 1,
@@ -47,9 +47,7 @@ CREATE TABLE dim_product
     product_key UInt32,
     product_id String,
     product_name String,
-    category String,
-    brand String,
-    price UInt32
+    price UInt64
 )
 ENGINE = MergeTree()
 ORDER BY product_key;
@@ -94,7 +92,7 @@ CREATE TABLE fact_sales
     store_key UInt32,
     employee_key UInt32,
     customer_key UInt32,
-    product_key UInt32,
+    product_key String,
     quantity UInt32,
     discount Decimal(5,2),
     final_amount UInt64,

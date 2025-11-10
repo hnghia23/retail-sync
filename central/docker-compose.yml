@@ -137,9 +137,9 @@ services:
     container_name: clickhouse
     restart: always
     ports:
-      - "8123:8123"   # HTTP interface (dùng cho ClickHouse client, Airflow, etc.)
-      - "9002:9000"   # Native TCP interface (dùng cho clickhouse-client)
-      - "9009:9009"   # Optional: inter-server communication port
+      - "8123:8123" 
+      - "9002:9000"   
+      - "9009:9009"   
     environment:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse_password
@@ -147,7 +147,7 @@ services:
       - ./data/clickhouse:/var/lib/clickhouse
       - ./logs/clickhouse:/var/log/clickhouse-server
       - ./init/clickhouse:/docker-entrypoint-initdb.d
-    ulimits:       # cần thiết để tránh lỗi open files
+    ulimits:      
       nofile:
         soft: 262144
         hard: 262144
