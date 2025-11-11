@@ -20,7 +20,8 @@ def publish_event(event_type: str, payload: dict):
         "timestamp": int(time.time() * 1000),
         "payload": payload
     }
+    
     # async send: returns Future; call get() nếu muốn block/kiểm tra
     producer.send(KAFKA_TOPIC, event)
     # flush không quá thường xuyên trong production, nhưng để đảm bảo demo, ta flush
-    producer.flush()
+    # producer.flush()

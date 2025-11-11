@@ -4,3 +4,5 @@
 main.ipynb
 /store/pos_service/__pycache__
 /store/pos_service/*/__pycache__/**
+/store/loyalty_service/__pycache__
+/store/loyalty_service/*/__pycache__/**

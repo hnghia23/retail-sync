@@ -1,5 +1,7 @@
 from flask import Flask, render_template, request, jsonify
+import datetime
 from sqlalchemy.orm import Session
+
 from db.postgres import engine
 from models.customer_info import CustomerInfo
 from models.loyalty_customer import LoyaltyCustomer 
@@ -21,12 +23,12 @@ def get_customer():
     if not customer_id:
         return jsonify({"error": "Missing customer_id"}), 400
 
-    # 1) thử cache trước
+    # thử cache trước
     cached = get_customer_from_cache(customer_id)
     if cached:
         return jsonify({"source": "cache", "data": cached})
 
-    # 2) nếu không có cache thì đọc DB (join customer_info + loyalty_customer nếu có)
+    # nếu không có cache thì đọc DB (join customer_info + loyalty_customer nếu có)
     with Session(engine) as session:
         customer = session.query(CustomerInfo).filter_by(id=customer_id).first()
         loyalty = session.query(LoyaltyCustomer).filter_by(customer_id=customer_id).first()
@@ -43,7 +45,7 @@ def get_customer():
                 "last_updated": loyalty.last_updated.isoformat() if loyalty.last_updated else None
             })
 
-        # 3) lưu cache
+        # lưu cache
         set_customer_to_cache(customer_id, data)
         return jsonify({"source": "db", "data": data})
 
@@ -122,8 +124,8 @@ def add_points():
         else:
             loyalty.point = (loyalty.point or 0) + earned
             loyalty.total_money_used = (loyalty.total_money_used or 0) + amount
-        loyalty.last_updated = None  # SQLAlchemy onupdate/calc if set up; for demo set manually
-        import datetime
+        loyalty.last_updated = None  
+
         loyalty.last_updated = datetime.datetime.utcnow()
         session.commit()
 

@@ -111,7 +111,7 @@ def load_pos_to_dw():
                 r["created_at"]
             ))
 
-        # 4️⃣ Câu lệnh insert ClickHouse
+        # Câu lệnh insert ClickHouse
         insert_query = """
             INSERT INTO dw.fact_sales (
                 sales_key, date_key, store_key, employee_key, customer_key, product_key,
@@ -120,7 +120,7 @@ def load_pos_to_dw():
             VALUES
         """
 
-        # 5️⃣ Ghi dữ liệu
+        # Ghi dữ liệu
         client.insert(
             table='dw.fact_sales',
             data=rows,
@@ -133,7 +133,7 @@ def load_pos_to_dw():
 
         print(f"✅ Loaded {len(rows)} rows into ClickHouse.dw.fact_sales")
 
-        # 6️⃣ Xóa file staging sau khi load xong
+        # Xóa file staging sau khi load xong
         os.remove(fact_path)
 
     # ========== PIPELINE FLOW ==========
