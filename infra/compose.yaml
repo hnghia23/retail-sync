@@ -1,0 +1,235 @@
+# retail-sync — compose scaffold theo profile
+#
+# Dùng để spike ngày 0 (docs/06-roadmap.md) và phát triển theo từng phần.
+# Không dùng cho production — xem docs/04-tech-stack.md §3 cho đường lên cloud.
+#
+# Cách dùng:
+#   docker compose -f infra/compose.yaml --profile edge --profile central up
+#   docker compose -f infra/compose.yaml --profile data up
+#   docker compose -f infra/compose.yaml --profile observability up
+#   docker compose -f infra/compose.yaml --profile edge --profile central --profile data --profile observability up   # nghiệm thu đầy đủ
+#
+# Ràng buộc bắt buộc đã áp trong file này (xem CLAUDE.md "Mười ràng buộc thiết kế"):
+#   - Postgres cửa hàng: synchronous_commit=on (mặc định của Postgres, KHÔNG override sang off)
+#   - Named volume cho mọi DB — không bind-mount vào OneDrive (môi trường Windows)
+#   - PostgreSQL 18: image chính thức đổi quy ước — named volume mount THẲNG vào
+#     /var/lib/postgresql, KHÔNG phải .../data như PG < 18. Mount sai chỗ thì container
+#     từ chối khởi động ngay từ dòng log đầu tiên — xác minh thật khi dựng compose ngày
+#     2026-09-18 (docker compose --profile edge up thất bại tới khi sửa).
+
+name: retail-sync
+
+x-postgres-common: &postgres-common
+  image: postgres:18
+  restart: unless-stopped
+  # pg_stat_statements — ADR-009, docs/04-tech-stack.md: "gần như miễn phí", bật cho MỌI
+  # Postgres (kể cả airflow-db) thay vì bật lẻ tẻ. `track=all` (khác mặc định `top`) để
+  # thấy cả câu lệnh bên trong hàm PL/pgSQL — chính là nơi các trigger bất biến
+  # (INV-2/INV-3) và `ensure_point_ledger_partitions()` chạy.
+  # Cần shared_preload_libraries ở tham số khởi động (không set được qua ALTER SYSTEM lúc
+  # DB đã chạy), rồi CREATE EXTENSION qua migration Alembic (xem 0002_*.py).
+  command: [
+    "postgres",
+    "-c", "shared_preload_libraries=pg_stat_statements",
+    "-c", "pg_stat_statements.track=all",
+  ]
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+
+services:
+
+  # ═══════════════════════ EDGE (profile: edge) ═══════════════════════
+  # Mô phỏng store-001. Nhân bản block này (store-002, store-003...) khi cần nhiều cửa hàng.
+
+  edge-db-store-001:
+    <<: *postgres-common
+    profiles: ["edge"]
+    environment:
+      POSTGRES_USER: ${EDGE_DB_USER:-edge_app}
+      POSTGRES_PASSWORD: ${EDGE_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: edge_store_001
+    ports: ["5433:5432"]
+    volumes:
+      - edge_db_store_001:/var/lib/postgresql  # PG 18: mount thẳng, không phải .../data
+    # KHÔNG set synchronous_commit=off — cửa hàng không có UPS (ràng buộc #1)
+
+  edge-cache-store-001:
+    image: redis:7-alpine
+    profiles: ["edge"]
+    restart: unless-stopped
+    ports: ["6380:6379"]
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - edge_cache_store_001:/data
+
+  edge-api-store-001:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    profiles: ["edge"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-001: { condition: service_healthy }
+    environment:
+      STORE_ID: store-001
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-001:5432/edge_store_001
+      REDIS_URL: redis://edge-cache-store-001:6379/0
+      CENTRAL_API_URL: http://central-api:8000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_SERVICE_NAME: edge-api-store-001
+      OTEL_RESOURCE_ATTRIBUTES: store.id=store-001
+    ports: ["8001:8000"]
+
+  # Cùng image với edge-api, khác câu lệnh: vòng đời khác hẳn (chạy nền, không phục
+  # vụ request) nên vẫn là tiến trình riêng (ADR-003).
+  edge-sync-worker-store-001:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["python", "-m", "edge.sync.worker"]
+    profiles: ["edge"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-001: { condition: service_healthy }
+    environment:
+      STORE_ID: store-001
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-001:5432/edge_store_001
+      CENTRAL_API_URL: http://central-api:8000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_SERVICE_NAME: sync-worker-store-001
+
+  # ═══════════════════════ CENTRAL (profile: central) ═══════════════════════
+
+  central-db:
+    <<: *postgres-common
+    profiles: ["central"]
+    environment:
+      POSTGRES_USER: ${CENTRAL_DB_USER:-central_app}
+      POSTGRES_PASSWORD: ${CENTRAL_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: central
+    ports: ["5434:5432"]
+    volumes:
+      - central_db:/var/lib/postgresql
+
+  central-api:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["uvicorn", "central.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    profiles: ["central"]
+    restart: unless-stopped
+    depends_on:
+      central-db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${CENTRAL_DB_USER:-central_app}:${CENTRAL_DB_PASSWORD}@central-db:5432/central
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_SERVICE_NAME: central-api
+    ports: ["8000:8000"]
+
+  # ═══════════════════════ DATA PLATFORM (profile: data) ═══════════════════════
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["data"]
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?bắt buộc đặt trong .env}
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24-alpine
+    profiles: ["data"]
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-dw}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?bắt buộc đặt trong .env}
+      CLICKHOUSE_DB: dw
+    ports: ["8123:8123", "9002:9000"]
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+
+  # Airflow 3 — LocalExecutor (ADR-007): KHÔNG dùng Celery worker/Redis riêng
+  airflow-db:
+    <<: *postgres-common
+    profiles: ["data"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql
+
+  airflow-init:
+    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
+    profiles: ["data"]
+    depends_on:
+      airflow-db: { condition: service_healthy }
+    environment: &airflow-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW_UID: "50000"
+    command: ["airflow", "db", "migrate"]
+
+  airflow-webserver:
+    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
+    profiles: ["data"]
+    restart: unless-stopped
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
+    environment: *airflow-env
+    ports: ["8081:8080"]
+    volumes:
+      - ../data_platform/airflow/dags:/opt/airflow/dags:ro
+    command: ["airflow", "webserver"]
+
+  airflow-scheduler:
+    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
+    profiles: ["data"]
+    restart: unless-stopped
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
+    environment: *airflow-env
+    volumes:
+      - ../data_platform/airflow/dags:/opt/airflow/dags:ro
+    command: ["airflow", "scheduler"]
+
+  # ═══════════════════════ BI (profile: bi) ═══════════════════════
+
+  metabase:
+    image: metabase/metabase:latest
+    profiles: ["bi"]
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    volumes:
+      - metabase_data:/metabase-data
+    environment:
+      MB_DB_FILE: /metabase-data/metabase.db
+
+  # ═══════════════════════ OBSERVABILITY (profile: observability) ═══════════════════════
+  # ADR-009 — 1 container thay vì SigNoz (4-8GB). Chỉ bật khi cần săn bottleneck.
+
+  otel-lgtm:
+    image: grafana/otel-lgtm:latest
+    profiles: ["observability"]
+    restart: unless-stopped
+    ports:
+      - "3001:3000"   # Grafana UI (đổi cổng để không đụng Metabase :3000)
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+volumes:
+  edge_db_store_001:
+  edge_cache_store_001:
+  central_db:
+  minio_data:
+  clickhouse_data:
+  airflow_db:
+  metabase_data:

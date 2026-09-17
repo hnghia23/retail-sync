@@ -1,8 +1,37 @@
+# ── Dữ liệu crawl (tài sản giữ lại, nhưng không commit bản nặng) ──
 /crawl_data/products/*
 /crawl_data/store_info/*
+
+# ── Secret ──
 .env
+.env.*.local
+infra/.env
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ── Nền tảng dữ liệu ──
+data_platform/dbt/target/
+data_platform/dbt/dbt_packages/
+data_platform/dbt/logs/
+
+# ── v1 (chỉ để tham khảo — CLAUDE.md) ──
 main.ipynb
-/store/pos_service/__pycache__
-/store/pos_service/*/__pycache__/**
-/store/loyalty_service/__pycache__
-/store/loyalty_service/*/__pycache__/**
+/store/**/__pycache__/
+/central/logs/
+/central/data/

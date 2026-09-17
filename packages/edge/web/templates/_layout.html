@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}retail-sync POS{% endblock %}</title>
+  <!-- Vendor cục bộ — KHÔNG tải từ CDN. Cửa hàng phải bán được hàng khi mất mạng hoàn
+       toàn (nguyên tắc kiến trúc #1); tải JS từ CDN thì mất mạng = trang trắng. -->
+  <script src="/ui/static/vendor/htmx.min.js"></script>
+  <script src="/ui/static/vendor/alpine.min.js" defer></script>
+  <style>
+    /* Xấu cũng được, phải chạy được — roadmap tuần 1 ngày 5. */
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #ddd; }
+    input, button, select { font-size: 1rem; padding: .5rem; }
+    button { cursor: pointer; }
+    .error { color: #b00020; font-weight: bold; }
+    .total { font-size: 1.4rem; font-weight: bold; }
+    .row { display: flex; gap: .5rem; align-items: center; }
+    .muted { color: #777; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

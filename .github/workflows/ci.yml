@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_FROZEN: "1"
+  # Ryuk (container dọn rác của testcontainers) có race điều kiện khởi động đã gặp nhiều
+  # lần khi phát triển cục bộ (cổng NAT chưa sẵn sàng lúc healthcheck đầu). Runner CI là
+  # máy ảo dùng một lần, tự hủy sau job — không cần lưới an toàn "dọn container nếu tiến
+  # trình test bị crash" của Ryuk. Tắt hẳn thay vì retry theo may rủi.
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+
+jobs:
+  # Cổng nhanh: chạy < 1 phút, không cần Docker. Hỏng ở đây thì không tốn máy chạy tiếp.
+  quality:
+    name: lint · type · ranh giới module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --all-extras --dev
+
+      - name: ruff format
+        run: uv run ruff format --check .
+      - name: ruff lint
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy
+
+      # ADR-004: build FAIL nếu có import vi phạm ranh giới.
+      # Không có ngoại lệ tạm thời — kỷ luật sẽ trượt lúc 11 giờ đêm tuần thứ 3.
+      - name: import-linter
+        run: uv run lint-imports
+
+  unit:
+    name: unit (không cần Docker)
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest tests/unit --cov --cov-report=term-missing
+
+  integration:
+    name: integration (testcontainers)
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --all-extras --dev
+      - run: uv run pytest tests/integration

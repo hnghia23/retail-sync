@@ -1,0 +1,15 @@
+{% extends "_layout.html" %}
+{% block title %}Mở ca — {{ store_id }}{% endblock %}
+{% block body %}
+  <h1>{{ store_id }}</h1>
+  <p class="muted">Chưa có ca nào đang mở. Mở ca để bắt đầu bán hàng.</p>
+  <form id="open-shift-form" hx-post="/ui/shifts/open" hx-target="body" hx-swap="innerHTML">
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <p>
+      <label>Tiền quỹ đầu ca<br>
+        <input type="number" name="opening_cash" value="0" min="0" required>
+      </label>
+    </p>
+    <button type="submit">Mở ca</button>
+  </form>
+{% endblock %}

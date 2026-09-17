@@ -1,0 +1,32 @@
+{% extends "_layout.html" %}
+{% block title %}Hóa đơn — {{ store_id }}{% endblock %}
+{% block body %}
+  <h1>Hóa đơn</h1>
+  <p class="muted">Mã đơn: {{ receipt.sale_id }}</p>
+  <table>
+    <thead><tr><th>Sản phẩm</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead>
+    <tbody>
+      {% for line in cart %}
+      <tr>
+        <td>{{ line.name }}</td>
+        <td>{{ line.quantity }}</td>
+        <td>{{ line.unit_price|money }}</td>
+        <td>{{ (line.unit_price * line.quantity)|money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p>Tạm tính: {{ receipt.subtotal|money }}</p>
+  {% if receipt.discount_tier %}<p>Giảm giá hạng ({{ receipt.tier_discount_pct }}%): -{{ receipt.discount_tier|money }}</p>{% endif %}
+  {% if receipt.discount_promo %}<p>Khuyến mãi: -{{ receipt.discount_promo|money }}</p>{% endif %}
+  <p class="total">Tổng: {{ receipt.total|money }}</p>
+  {% if receipt.change_amount is not none %}<p>Tiền thối: {{ receipt.change_amount|money }}</p>{% endif %}
+  <p class="muted">
+    {% if receipt.points_earned is none %}
+      Điểm tích lũy: đang xử lý (sẽ được đối soát)
+    {% else %}
+      Điểm tích lũy: +{{ receipt.points_earned }}
+    {% endif %}
+  </p>
+  <p><a href="/ui/pos">← Đơn tiếp theo</a></p>
+{% endblock %}

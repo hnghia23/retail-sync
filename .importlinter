@@ -1,0 +1,105 @@
+# Module boundary contracts -- ADR-004 (docs/adr/004-modular-monolith.md).
+#
+# "Do not rely on human discipline: discipline slips at 11pm in week 3."
+#
+# Run:  uv run lint-imports
+# A CI failure here means an import crossed a boundary. There are no temporary exemptions.
+#
+# ASCII ONLY in this file. import-linter reads it with ConfigParser using the *locale*
+# encoding (cp1252 on a default Windows install), so a single Vietnamese character makes
+# the whole run fail with a UnicodeDecodeError instead of reporting contracts.
+# Same rule as packages/*/alembic.ini. Vietnamese explanations live in the modules'
+# docstrings, which are Python source and therefore always UTF-8.
+
+[importlinter]
+root_packages =
+    shared
+    edge
+    central
+include_external_packages = False
+
+# -- 1. `shared` must not know about application code ------------------------
+# It carries the event contract that BOTH edge and central import. A dependency back
+# into either one would be a cycle across the store/central boundary.
+[importlinter:contract:shared-is-independent]
+name = shared does not depend on edge or central
+type = forbidden
+source_modules =
+    shared
+forbidden_modules =
+    edge
+    central
+
+# -- 2. edge <-> central: two systems, joined only by HTTP + the event contract ----
+[importlinter:contract:edge-central-separate]
+name = edge and central are independent (joined via HTTP + shared.events only)
+type = independence
+modules =
+    edge
+    central
+
+# -- 3. POS <-> Loyalty boundary (ADR-004 rules 1 and 2) ---------------------
+# `pos` may only reach `loyalty` through edge.loyalty.api. It must never touch
+# loyalty's inner layers, and never query loyalty's tables.
+#
+# allow_indirect_imports: only DIRECT imports are forbidden. The chain
+# pos -> edge.loyalty.api -> edge.loyalty.domain is legitimate -- going through the
+# public door is exactly what ADR-004 asks for. Forbidding indirect chains too would
+# forbid api.py from doing its job.
+[importlinter:contract:pos-not-into-loyalty-internals]
+name = pos reaches loyalty only through edge.loyalty.api
+type = forbidden
+source_modules =
+    edge.pos
+forbidden_modules =
+    edge.loyalty.domain
+    edge.loyalty.application
+    edge.loyalty.adapters
+allow_indirect_imports = True
+
+[importlinter:contract:loyalty-never-into-pos]
+name = loyalty never imports pos (one-way dependency)
+type = forbidden
+source_modules =
+    edge.loyalty
+forbidden_modules =
+    edge.pos
+
+# -- 4. `reporting` is a read layer; it must not drive write use cases -------
+[importlinter:contract:reporting-is-read-only]
+name = reporting does not import the application layer of pos/loyalty
+type = forbidden
+source_modules =
+    edge.reporting
+forbidden_modules =
+    edge.pos.application
+    edge.loyalty.application
+
+# -- 5. Layering inside each module: domain is pure, it knows no infrastructure ----
+[importlinter:contract:pos-layers]
+name = pos -- adapters > application > domain
+type = layers
+layers =
+    edge.pos.adapters
+    edge.pos.application
+    edge.pos.domain
+
+[importlinter:contract:loyalty-layers]
+name = loyalty -- adapters > application > domain
+type = layers
+layers =
+    edge.loyalty.adapters
+    edge.loyalty.application
+    edge.loyalty.domain
+
+# -- 6. Sync worker is transport only; it must not learn any business logic ---
+# It reads the outbox and POSTs it. It never interprets an event's content.
+[importlinter:contract:sync-is-transport-only]
+name = sync worker is a transport layer, it holds no business logic
+type = forbidden
+source_modules =
+    edge.sync
+forbidden_modules =
+    edge.pos
+    edge.loyalty
+    edge.reporting

@@ -1,0 +1,9 @@
+{% extends "_layout.html" %}
+{% block title %}Bán hàng — {{ store_id }}{% endblock %}
+{% block body %}
+  <div class="row" style="justify-content: space-between">
+    <h1>{{ store_id }}</h1>
+    <span class="muted">Thu ngân: {{ employee_id }}</span>
+  </div>
+  {% include "_pos_form.html" %}
+{% endblock %}

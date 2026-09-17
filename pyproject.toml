@@ -1,0 +1,143 @@
+[project]
+name = "retail-sync"
+version = "0.2.0"
+description = "Hệ thống dữ liệu cho chuỗi bán lẻ — POS + Loyalty + nền tảng phân tích (v2)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Proprietary" }
+
+dependencies = [
+    # ── Web / API ──
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "jinja2>=3.1",                 # UI POS — HTMX render phía server (ADR-008)
+    "python-multipart>=0.0.12",    # bắt buộc để FastAPI parse form HTML (Form(...))
+    # ── Cấu hình & kiểu ──
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    # ── Dữ liệu ──
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    # ── Liên service ──
+    "httpx>=0.28",
+    # ── Xác thực ──
+    "pyjwt>=2.10",
+    "argon2-cffi>=23.1",
+    # ── ID ──
+    "uuid6>=2024.7.10",            # phương án dự phòng nếu uuidv7() trong PG trượt (S2, roadmap ngày 0)
+    # ── Observability (ADR-009) ──
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-http>=1.28",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-instrumentation-asyncpg>=0.49b0",
+    "opentelemetry-instrumentation-redis>=0.49b0",
+    "opentelemetry-instrumentation-httpx>=0.49b0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "import-linter>=2.1",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "testcontainers[postgres,redis]>=4.8",
+    "anyio>=4.6",
+]
+# Dependency của nền tảng dữ liệu nằm ở data_platform/requirements.txt (image Airflow ghim
+# constraint rất chặt; trộn chung sẽ kéo tụt version FastAPI/SQLAlchemy ở edge).
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# `packages/` là thư mục gốc import — top-level: shared, edge, central
+packages = ["packages/shared", "packages/edge", "packages/central"]
+
+[tool.uv]
+package = true
+
+# ───────────────────────────── ruff ─────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["packages", "tests"]
+extend-exclude = ["store", "central/dags", "central/scripts", "crawl_data"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes
+    "I",           # isort
+    "N",           # pep8-naming
+    "UP",          # pyupgrade
+    "B",           # bugbear
+    "C4",          # comprehensions
+    "DTZ",         # ⚠️ flake8-datetimez — cấm datetime naive (quy ước: timestamptz UTC)
+    "ASYNC",
+    "S",           # bandit
+    "RUF",
+]
+ignore = [
+    "S101",        # assert — cần cho pytest
+    "B008",        # Depends() trong default arg là idiom FastAPI
+    # Codebase viết docstring/comment bằng tiếng Việt (CLAUDE.md §Quy ước) — ×, —, ⚠️,
+    # dấu nháy kiểu Việt... là chữ hợp lệ, không phải lỗi gõ nhầm ký tự la-tinh nhìn giống.
+    "RUF002",      # ambiguous unicode character trong docstring
+    "RUF003",      # ambiguous unicode character trong comment
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S107", "S311"]
+"packages/*/migrations/versions/*" = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["shared", "edge", "central"]
+
+# ───────────────────────────── mypy ─────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+files = ["packages", "tests"]
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unreachable = true
+# `files` đã giới hạn ở packages + tests, nên v1 (`store/`, `central/`) nằm ngoài tầm quét.
+
+[[tool.mypy.overrides]]
+# Không có stub/py.typed nhưng mypy VẪN suy được kiểu đúng từ mã nguồn .py của chúng
+# (uuid7() -> UUID, PasswordHasher().hash() -> str) — chỉ cần tắt lỗi "không tìm thấy stub".
+module = ["testcontainers.*", "uuid6.*", "argon2.*", "asyncpg.*", "redis.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# opentelemetry-instrumentation-* khác: mypy đọc được mã nguồn .py KHÔNG chú thích kiểu
+# của chúng và báo "no-untyped-call" ở chế độ strict — `ignore_missing_imports` không tắt
+# được lỗi này (nó chỉ tắt lỗi "không tìm thấy stub"). `follow_imports = "skip"` buộc mypy
+# coi cả cây import là `Any`, đúng ý định: các gói instrumentation không phải code của ta.
+module = ["opentelemetry.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+# ───────────────────────────── pytest ─────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["packages"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: cần Docker (testcontainers)",
+    "scenario: end-to-end, cần compose stack",
+    "slow: chạy > 30s",
+]
+
+[tool.coverage.run]
+source = ["packages"]
+omit = ["*/migrations/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

@@ -1,0 +1,8 @@
+# Dependency cho image Airflow (ADR-007). Tách khỏi pyproject.toml vì Airflow ghim
+# constraint rất chặt — trộn chung sẽ kéo tụt version của FastAPI/SQLAlchemy ở edge.
+astronomer-cosmos>=1.7
+dbt-core>=1.8,<1.9
+dbt-clickhouse>=1.8
+clickhouse-connect>=0.8
+minio>=7.2
+pyarrow>=18.0

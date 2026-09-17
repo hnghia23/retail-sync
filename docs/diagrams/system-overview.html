@@ -1,0 +1,549 @@
+<title>Kiến Trúc Retail-Sync</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f1efe6;
+    --bg-raised:#fffdf7;
+    --ink:#1c211f;
+    --ink-soft:#565f59;
+    --line:#cdc6b2;
+    --line-strong:#948d76;
+    --accent:#0d6e5f;
+    --accent-soft:#dbe9e2;
+    --lane-store:#8a6a34;
+    --lane-central:#3c5a80;
+    --lane-data:#6b4658;
+    --code-bg:#e7e2d0;
+    --shadow: 0 1px 0 rgba(28,33,31,0.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14181a;
+      --bg-raised:#1b2224;
+      --ink:#e9e6dd;
+      --ink-soft:#a3aca4;
+      --line:#333c3a;
+      --line-strong:#4d5652;
+      --accent:#58c7b4;
+      --accent-soft:#1c332e;
+      --lane-store:#caa25e;
+      --lane-central:#89aed4;
+      --lane-data:#cf9bb1;
+      --code-bg:#20282a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14181a;
+    --bg-raised:#1b2224;
+    --ink:#e9e6dd;
+    --ink-soft:#a3aca4;
+    --line:#333c3a;
+    --line-strong:#4d5652;
+    --accent:#58c7b4;
+    --accent-soft:#1c332e;
+    --lane-store:#caa25e;
+    --lane-central:#89aed4;
+    --lane-data:#cf9bb1;
+    --code-bg:#20282a;
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background-color:var(--bg);
+    background-image: repeating-linear-gradient(to bottom, transparent, transparent 27px, var(--line) 27px, var(--line) 28px);
+    color:var(--ink);
+    font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+    line-height:1.55;
+  }
+  .display{ font-family:"Fraunces", ui-serif, Georgia, serif; text-wrap:balance; }
+  .mono{ font-family:"IBM Plex Mono", ui-monospace, monospace; }
+
+  .page{ max-width:1180px; margin:0 auto; padding: 48px 28px 64px; }
+
+  header.hero{ padding-bottom: 28px; border-bottom: 1px solid var(--line-strong); margin-bottom:36px; }
+  header.hero h1{
+    font-size: clamp(28px, 4vw, 42px);
+    font-weight:600;
+    margin:0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  header.hero .dek{
+    max-width: 66ch;
+    color: var(--ink-soft);
+    font-size: 15.5px;
+    margin: 0 0 18px;
+  }
+  .meta-row{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  .pill{
+    display:inline-flex; align-items:center; gap:6px;
+    border:1px solid var(--line-strong); border-radius:3px;
+    padding: 5px 10px; font-size:11.5px; font-weight:600;
+    letter-spacing:0.03em; text-transform:uppercase;
+    background:var(--bg-raised); color:var(--ink-soft);
+  }
+  .pill.accent{ border-color:var(--accent); color:var(--accent); }
+  .pill .dot{ width:6px;height:6px;border-radius:50%; background:currentColor; }
+
+  h2{
+    font-family:"Fraunces", serif; font-weight:600; font-size:20px;
+    margin: 0 0 6px; text-wrap:balance;
+  }
+  .section-note{ color:var(--ink-soft); font-size:13.5px; max-width:70ch; margin:0 0 20px; }
+
+  section{ margin-bottom: 52px; }
+
+  /* diagram */
+  .diagram-frame{
+    border:1px solid var(--line-strong);
+    background:var(--bg-raised);
+    border-radius:4px;
+    box-shadow: var(--shadow);
+    overflow:hidden;
+  }
+  .diagram-scroll{ overflow-x:auto; padding: 18px 18px 6px; }
+  .diagram-scroll svg{ display:block; width:1680px; max-width:none; height:auto; }
+  figure{ margin:0; }
+  figcaption{
+    padding: 14px 22px 18px; font-size:13px; color:var(--ink-soft);
+    border-top:1px solid var(--line); max-width:none;
+  }
+  figcaption b{ color:var(--ink); font-weight:600; }
+
+  /* legend */
+  .legend-grid{
+    display:grid; grid-template-columns: repeat(2, 1fr); gap:1px;
+    background:var(--line-strong); border:1px solid var(--line-strong); border-radius:4px; overflow:hidden;
+  }
+  @media (max-width: 780px){ .legend-grid{ grid-template-columns: 1fr; } }
+  .legend-item{
+    background:var(--bg-raised); padding:16px 18px; display:flex; gap:12px;
+  }
+  .legend-num{
+    flex:none; width:26px; height:26px; border-radius:50%;
+    background:var(--accent); color:var(--bg-raised);
+    display:flex; align-items:center; justify-content:center;
+    font-family:"Fraunces",serif; font-weight:700; font-size:13px;
+    margin-top:1px;
+  }
+  .legend-body h3{ font-size:14px; margin:0 0 4px; font-weight:600; font-family:"IBM Plex Sans", sans-serif; }
+  .legend-body p{ margin:0 0 8px; font-size:13px; color:var(--ink-soft); max-width:52ch; }
+  .ref-tag{
+    display:inline-block; font-size:10.5px; font-family:"IBM Plex Mono", monospace;
+    background:var(--code-bg); color:var(--ink-soft); padding:2px 6px; border-radius:2px;
+  }
+
+  /* stack strip */
+  .stack-grid{ display:grid; grid-template-columns: 150px 1fr; gap: 4px 18px; }
+  .stack-grid .layer{
+    font-size:11px; font-weight:600; letter-spacing:0.05em; text-transform:uppercase;
+    padding: 10px 0; color:var(--ink-soft); border-top:1px solid var(--line);
+  }
+  .stack-grid .techs{ padding:10px 0; border-top:1px solid var(--line); display:flex; flex-wrap:wrap; gap:6px 8px; align-items:center; }
+  .stack-grid .layer:first-of-type, .stack-grid .techs:first-of-type{ border-top:none; }
+  .tech-pill{
+    font-family:"IBM Plex Mono", monospace; font-size:12px;
+    background:var(--code-bg); color:var(--ink); padding:3px 8px; border-radius:2px;
+    border:1px solid var(--line);
+  }
+  .tech-pill.would{ opacity:0.6; border-style:dashed; }
+  .layer-tag{ display:inline-block; width:9px; height:9px; border-radius:1px; margin-right:6px; vertical-align:1px; }
+
+  footer{
+    border-top:1px solid var(--line-strong); padding-top:20px;
+    font-size:12px; color:var(--ink-soft);
+  }
+  footer .mono{ font-size:11.5px; }
+  a{ color:var(--accent); }
+</style>
+
+<div class="page">
+
+  <header class="hero">
+    <h1 class="display">Kiến Trúc Retail-Sync</h1>
+    <p class="dek">Sơ đồ tổng quan hệ thống — cửa hàng, trung tâm, và nền tảng dữ liệu — cùng luồng bán hàng,
+    đồng bộ điểm tích lũy, và ETL. Tám chú thích đánh số dẫn thẳng tới các ADR và quyết định thiết kế
+    đã nghiên cứu trong <span class="mono">docs/</span>.</p>
+    <div class="meta-row">
+      <span class="pill accent"><span class="dot"></span>Stack đã chốt</span>
+      <span class="pill">Ưu tiên: ổn định + scale</span>
+      <span class="pill">11 tài liệu · 9 ADR</span>
+      <span class="pill">2026-09-11</span>
+    </div>
+  </header>
+
+  <section id="diagram">
+    <h2>Sơ đồ hệ thống</h2>
+    <p class="section-note">Ba lằn ranh: cửa hàng tự chủ (offline-first) · trung tâm hợp nhất điểm tích lũy ·
+    nền tảng dữ liệu chạy T+1. Đường viền nét đứt đứng đánh dấu hai ranh giới có thể đứt gãy — đọc kỹ nhãn trên mỗi mũi tên trước khi đọc chú thích bên dưới.</p>
+
+    <div class="diagram-frame">
+      <div class="diagram-scroll">
+        <figure>
+          <svg viewBox="0 0 1680 780" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Sơ đồ kiến trúc retail-sync: cửa hàng gồm UI, Edge API modular monolith với ba module pos/loyalty/reporting, PostgreSQL 18 và Redis, kết nối qua một transaction tới sổ cái điểm; sync worker đọc outbox và đẩy sự kiện qua ranh giới mạng tới Central API; trung tâm ghi vào PostgreSQL point_ledger có phân vùng; dữ liệu chảy T cộng 1 qua Airflow vào MinIO, dbt, ClickHouse, rồi Metabase.">
+            <defs>
+              <marker id="arrowInk" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"></path>
+              </marker>
+              <marker id="arrowAccent" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+              </marker>
+            </defs>
+
+            <!-- ============ LANE TITLES ============ -->
+            <text x="40" y="30" class="mono" font-family="Fraunces, serif" font-weight="600" font-size="15" fill="var(--ink)">CỬA HÀNG (EDGE) · NHÂN BẢN N LẦN</text>
+            <rect x="40" y="38" width="130" height="4" fill="var(--lane-store)"></rect>
+
+            <text x="710" y="30" font-family="Fraunces, serif" font-weight="600" font-size="15" fill="var(--ink)">TRUNG TÂM</text>
+            <rect x="710" y="38" width="90" height="4" fill="var(--lane-central)"></rect>
+
+            <text x="1120" y="30" font-family="Fraunces, serif" font-weight="600" font-size="15" fill="var(--ink)">NỀN TẢNG DỮ LIỆU · T+1</text>
+            <rect x="1120" y="38" width="168" height="4" fill="var(--lane-data)"></rect>
+
+            <!-- ============ BOUNDARY DIVIDERS ============ -->
+            <line x1="675" y1="96" x2="675" y2="740" stroke="var(--line-strong)" stroke-width="1" stroke-dasharray="3 5"></line>
+            <text transform="rotate(-90 675 610)" x="675" y="610" text-anchor="middle" font-size="9" font-weight="600" letter-spacing="0.05em" fill="var(--ink-soft)">RANH GIỚI MẠNG — CÓ THỂ ĐỨT BẤT CỨ LÚC NÀO</text>
+
+            <line x1="1085" y1="96" x2="1085" y2="740" stroke="var(--line-strong)" stroke-width="1" stroke-dasharray="3 5"></line>
+            <text transform="rotate(-90 1085 610)" x="1085" y="610" text-anchor="middle" font-size="9" font-weight="600" letter-spacing="0.05em" fill="var(--ink-soft)">T+1 — KHÔNG CHẶN VẬN HÀNH</text>
+
+            <!-- ============ ACTOR TAGS ============ -->
+            <rect x="40" y="54" width="104" height="28" rx="3" fill="var(--bg-raised)" stroke="var(--line-strong)"></rect>
+            <text x="92" y="72" text-anchor="middle" font-size="10" font-weight="600" letter-spacing="0.04em" fill="var(--ink)">THU NGÂN</text>
+            <line x1="92" y1="82" x2="92" y2="108" stroke="var(--ink-soft)" stroke-width="1" marker-end="url(#arrowInk)"></line>
+
+            <rect x="156" y="54" width="132" height="28" rx="3" fill="var(--bg-raised)" stroke="var(--line-strong)"></rect>
+            <text x="222" y="72" text-anchor="middle" font-size="10" font-weight="600" letter-spacing="0.04em" fill="var(--ink)">QL CỬA HÀNG</text>
+            <line x1="222" y1="82" x2="222" y2="108" stroke="var(--ink-soft)" stroke-width="1" marker-end="url(#arrowInk)"></line>
+
+            <rect x="710" y="54" width="132" height="28" rx="3" fill="var(--bg-raised)" stroke="var(--line-strong)"></rect>
+            <text x="776" y="72" text-anchor="middle" font-size="10" font-weight="600" letter-spacing="0.04em" fill="var(--ink)">QL KHU VỰC</text>
+            <line x1="776" y1="82" x2="776" y2="190" stroke="var(--ink-soft)" stroke-width="1" marker-end="url(#arrowInk)"></line>
+
+            <rect x="1120" y="54" width="280" height="28" rx="3" fill="var(--bg-raised)" stroke="var(--line-strong)"></rect>
+            <text x="1260" y="72" text-anchor="middle" font-size="9" font-weight="600" letter-spacing="0.03em" fill="var(--ink)">TRỤ SỞ · MUA HÀNG · MARKETING · BGĐ</text>
+            <path d="M 1394 82 L 1394 96 L 1626 96 L 1626 686 L 1424 686" fill="none" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="7 5" marker-end="url(#arrowInk)"></path>
+            <text transform="rotate(-90 1636 420)" x="1636" y="420" text-anchor="middle" font-size="9" font-weight="600" letter-spacing="0.03em" fill="var(--ink-soft)">T+1 · PHÂN TÍCH TOÀN CHUỖI</text>
+
+            <!-- ============ ROW A — UI (store only) ============ -->
+            <rect x="40" y="110" width="600" height="62" rx="4" fill="var(--bg-raised)" stroke="var(--line-strong)" stroke-width="1.5"></rect>
+            <text x="60" y="136" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">POS UI + BÁO CÁO CA</text>
+            <text x="60" y="156" font-size="10.5" fill="var(--ink-soft)">HTMX + Alpine.js — server-rendered, không build step</text>
+
+            <line x1="340" y1="172" x2="340" y2="190" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></line>
+            <text x="352" y="184" font-size="9.5" fill="var(--ink-soft)">HTTP</text>
+
+            <!-- ============ ROW B — API / ORCHESTRATOR ============ -->
+            <rect x="40" y="192" width="600" height="100" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="56" y="214" font-family="Fraunces, serif" font-weight="600" font-size="14" fill="var(--ink)">EDGE API — FastAPI</text>
+            <text x="56" y="230" font-size="10" font-style="italic" fill="var(--ink-soft)">modular monolith</text>
+            <rect x="56" y="240" width="176" height="42" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="144" y="265" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">pos</text>
+            <rect x="244" y="240" width="176" height="42" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="332" y="265" text-anchor="middle" class="mono" font-size="11" fill="var(--ink)">loyalty</text>
+            <rect x="432" y="240" width="192" height="42" rx="3" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"></rect>
+            <text x="528" y="259" text-anchor="middle" class="mono" font-size="11" fill="var(--accent)">reporting</text>
+            <text x="528" y="273" text-anchor="middle" font-size="8" fill="var(--accent)">T+0 · mới</text>
+
+            <rect x="710" y="192" width="340" height="100" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="726" y="214" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">CENTRAL API — FastAPI</text>
+            <rect x="726" y="236" width="96" height="42" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="774" y="261" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">ingest</text>
+            <rect x="830" y="236" width="96" height="42" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="878" y="261" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">lookup</text>
+            <rect x="934" y="236" width="100" height="42" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="984" y="261" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">reporting</text>
+
+            <rect x="1120" y="192" width="480" height="100" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="1136" y="214" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">AIRFLOW 3 (LocalExecutor)</text>
+            <text x="1136" y="230" font-size="10" font-style="italic" fill="var(--ink-soft)">+ astronomer-cosmos</text>
+            <rect x="1136" y="240" width="448" height="40" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1360" y="264" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">dbt-core — staging → intermediate → marts</text>
+
+            <!-- crossing arrow f: lookup (edge -> central, timeout, non-blocking) -->
+            <line x1="640" y1="236" x2="710" y2="250" stroke="var(--ink-soft)" stroke-width="1.25" stroke-dasharray="7 5" marker-end="url(#arrowInk)"></line>
+            <text x="646" y="212" font-size="8.5" fill="var(--ink-soft)">tra khách (miss)</text>
+            <text x="646" y="222" font-size="8.5" fill="var(--ink-soft)">timeout 500ms → bỏ qua</text>
+
+            <!-- ============ OTEL GAP BAND ============ -->
+            <line x1="200" y1="322" x2="1620" y2="322" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="2 5"></line>
+            <line x1="340" y1="292" x2="340" y2="322" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="2 5"></line>
+            <line x1="880" y1="292" x2="880" y2="322" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="2 5"></line>
+            <line x1="1360" y1="292" x2="1360" y2="322" stroke="var(--ink-soft)" stroke-width="1" stroke-dasharray="2 5"></line>
+            <rect x="820" y="300" width="120" height="34" rx="3" fill="var(--bg)" stroke="var(--ink-soft)" stroke-dasharray="2 5"></rect>
+            <text x="880" y="321" text-anchor="middle" class="mono" font-size="9" fill="var(--ink-soft)">otel-lgtm</text>
+
+            <!-- ============ ROW C — STORAGE ============ -->
+            <!-- Postgres Edge -->
+            <rect x="40" y="352" width="430" height="128" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="56" y="374" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">PostgreSQL 18</text>
+            <circle cx="462" cy="362" r="11" fill="var(--accent)"></circle>
+            <text x="462" y="366" text-anchor="middle" font-weight="700" font-size="10" fill="var(--bg-raised)">1</text>
+
+            <rect x="54" y="386" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="118" y="401" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">sale</text>
+            <rect x="190" y="386" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="254" y="401" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">sale_line</text>
+            <rect x="326" y="386" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="390" y="401" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">sale_payment</text>
+
+            <rect x="54" y="410" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="118" y="425" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">shift</text>
+            <rect x="190" y="410" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="254" y="425" text-anchor="middle" class="mono" font-size="9" fill="var(--ink)">point_ledger_local</text>
+            <rect x="326" y="410" width="128" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="390" y="425" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">product_cache</text>
+
+            <rect x="54" y="434" width="264" height="24" rx="2" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.25"></rect>
+            <text x="186" y="450" text-anchor="middle" class="mono" font-size="10.5" fill="var(--accent)">outbox</text>
+            <circle cx="330" cy="434" r="10" fill="var(--accent)"></circle>
+            <text x="330" y="438" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">2</text>
+
+            <!-- Redis -->
+            <rect x="490" y="352" width="150" height="128" rx="4" fill="var(--bg-raised)" stroke="var(--line-strong)" stroke-width="1.25" stroke-dasharray="6 4"></rect>
+            <text x="506" y="374" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">Redis 7</text>
+            <text x="506" y="396" font-size="10" fill="var(--ink-soft)">cache khách</text>
+            <text x="506" y="412" font-size="10" fill="var(--ink-soft)">phiên đăng nhập</text>
+            <text x="506" y="434" font-size="9.5" font-style="italic" fill="var(--ink-soft)">— KHÔNG sống còn</text>
+
+            <!-- Postgres Central -->
+            <rect x="710" y="352" width="340" height="128" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="726" y="374" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">PostgreSQL 18</text>
+
+            <rect x="726" y="386" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="801" y="401" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">customer</text>
+            <rect x="884" y="386" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="959" y="401" text-anchor="middle" class="mono" font-size="9" fill="var(--ink)">point_ledger (part.)</text>
+            <circle cx="1034" cy="396" r="10" fill="var(--accent)"></circle>
+            <text x="1034" y="400" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">4</text>
+
+            <rect x="726" y="410" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="801" y="425" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">point_balance</text>
+            <circle cx="876" cy="420" r="10" fill="var(--accent)"></circle>
+            <text x="876" y="424" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">5</text>
+            <rect x="884" y="410" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="959" y="425" text-anchor="middle" class="mono" font-size="9" fill="var(--ink)">master data (6 bảng)</text>
+
+            <rect x="726" y="434" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="801" y="449" text-anchor="middle" class="mono" font-size="9" fill="var(--ink)">store_sync_status</text>
+            <rect x="884" y="434" width="150" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="959" y="449" text-anchor="middle" class="mono" font-size="9" fill="var(--ink)">processed_event</text>
+
+            <!-- MinIO -->
+            <rect x="1120" y="352" width="480" height="128" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="1136" y="374" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">MinIO + Parquet</text>
+            <rect x="1136" y="392" width="440" height="26" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1356" y="409" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">bronze/&lt;nguồn&gt;/dt=recorded_at/…</text>
+            <circle cx="1580" cy="392" r="10" fill="var(--accent)"></circle>
+            <text x="1580" y="396" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">6</text>
+            <rect x="1136" y="424" width="440" height="26" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1356" y="441" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">silver/&lt;thực_thể&gt;/dt=…/</text>
+
+            <!-- critical-path arrow e -->
+            <line x1="240" y1="292" x2="240" y2="352" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#arrowAccent)"></line>
+            <text x="250" y="308" font-size="10" font-weight="600" fill="var(--accent)">1 transaction —</text>
+            <text x="250" y="322" font-size="9" fill="var(--accent)">sale+line+payment+ledger+outbox</text>
+
+            <!-- cache-aside double arrow d -->
+            <line x1="565" y1="292" x2="565" y2="352" stroke="var(--ink-soft)" stroke-width="1.25" stroke-dasharray="6 4" marker-start="url(#arrowInk)" marker-end="url(#arrowInk)"></line>
+            <text x="575" y="312" font-size="9.5" fill="var(--ink-soft)">cache-aside</text>
+            <text x="575" y="324" font-size="8.5" fill="var(--ink-soft)">không sống còn</text>
+
+            <!-- arrow m airflow -> minio -->
+            <line x1="1360" y1="292" x2="1360" y2="352" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></line>
+            <text x="1372" y="326" font-size="9.5" fill="var(--ink-soft)">ghi bronze</text>
+
+            <!-- arrow l: central pg -> airflow (T+1 extract) -->
+            <path d="M 1050 410 L 1085 410 L 1085 240 L 1120 240" fill="none" stroke="var(--ink-soft)" stroke-width="1.25" stroke-dasharray="7 5" marker-end="url(#arrowInk)"></path>
+            <text transform="rotate(-90 1090 320)" x="1090" y="320" text-anchor="middle" font-size="9" fill="var(--ink-soft)">trích xuất tăng dần (recorded_at)</text>
+
+            <!-- ============ ROW D — SYNC WORKER + CLICKHOUSE ============ -->
+            <rect x="40" y="500" width="300" height="90" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="56" y="524" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">SYNC WORKER · tiến trình riêng</text>
+            <text x="56" y="548" class="mono" font-size="10" fill="var(--ink-soft)">SELECT … FOR UPDATE SKIP LOCKED</text>
+            <text x="56" y="566" font-size="10" fill="var(--ink-soft)">lô 100–500 · backoff + jitter</text>
+
+            <line x1="186" y1="458" x2="186" y2="500" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></line>
+            <text x="196" y="482" font-size="9" fill="var(--ink-soft)">outbox</text>
+
+            <!-- arrow h: sync worker -> central api (crosses boundary) -->
+            <path d="M 340 545 L 700 545 L 700 305 L 745 305 L 745 292" fill="none" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></path>
+            <text x="705" y="538" font-size="9.5" fill="var(--ink)">POST /events</text>
+            <text x="705" y="550" font-size="8.5" fill="var(--ink-soft)">at-least-once</text>
+            <circle cx="700" cy="545" r="10" fill="var(--accent)"></circle>
+            <text x="700" y="549" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">3</text>
+
+            <!-- ClickHouse -->
+            <rect x="1120" y="500" width="480" height="126" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
+            <text x="1136" y="522" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">ClickHouse — star schema</text>
+            <circle cx="1590" cy="510" r="11" fill="var(--accent)"></circle>
+            <text x="1590" y="514" text-anchor="middle" font-weight="700" font-size="10" fill="var(--bg-raised)">7</text>
+
+            <rect x="1136" y="536" width="216" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1244" y="551" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">dim_* × 7</text>
+            <rect x="1368" y="536" width="216" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1476" y="551" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">fact_sale_line</text>
+
+            <rect x="1136" y="562" width="216" height="22" rx="2" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.25"></rect>
+            <text x="1244" y="577" text-anchor="middle" class="mono" font-size="9.5" fill="var(--accent)">fact_payment</text>
+            <circle cx="1352" cy="573" r="10" fill="var(--accent)"></circle>
+            <text x="1352" y="577" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">8</text>
+            <rect x="1368" y="562" width="216" height="22" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
+            <text x="1476" y="577" text-anchor="middle" class="mono" font-size="9.5" fill="var(--ink)">fact_point_event</text>
+
+            <line x1="1360" y1="480" x2="1360" y2="500" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></line>
+            <text x="1372" y="494" font-size="8.5" fill="var(--ink-soft)">s3() → dbt build</text>
+
+            <!-- ============ ROW E — METABASE ============ -->
+            <rect x="1120" y="646" width="300" height="80" rx="4" fill="var(--bg-raised)" stroke="var(--line-strong)" stroke-width="1.25" stroke-dasharray="6 4"></rect>
+            <text x="1136" y="670" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">Metabase</text>
+            <text x="1136" y="688" font-size="9.5" font-style="italic" fill="var(--ink-soft)">Could — SQL mẫu nếu cắt phạm vi</text>
+            <text x="1136" y="704" font-size="9" fill="var(--ink-soft)">4 dashboard: doanh thu · sản phẩm · khách · loyalty</text>
+
+            <line x1="1260" y1="626" x2="1260" y2="646" stroke="var(--ink-soft)" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#arrowInk)"></line>
+            <text x="1272" y="640" font-size="9" fill="var(--ink-soft)">T+1</text>
+
+          </svg>
+          <figcaption>
+            <b>Ba lằn ranh, một mạch bán hàng.</b> Thu ngân chốt đơn tại quầy → <span class="mono">Edge API</span> ghi
+            <b>một transaction duy nhất</b> (đường accent) rồi trả hóa đơn ngay — trung tâm có sập cũng không ảnh hưởng.
+            Điểm và đơn hàng rời cửa hàng bất đồng bộ qua outbox + sync worker, băng qua "ranh giới mạng" có thể đứt
+            bất cứ lúc nào. Dữ liệu vận hành chảy tiếp sang nền tảng dữ liệu theo lô, T+1, không chặn việc bán hàng.
+            Số tròn đánh dấu 8 ràng buộc thiết kế bắt buộc — xem chú thích bên dưới.
+          </figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="legend">
+    <h2>Chú thích — 8 ràng buộc bắt buộc</h2>
+    <p class="section-note">Mỗi số trên sơ đồ ứng với một quyết định thiết kế cụ thể, dễ quên và tốn kém nếu bỏ sót.
+    Rút từ <span class="mono">docs/08-reliability-and-scale.md</span>, <span class="mono">docs/05-data-model.md</span>
+    và bộ ADR.</p>
+    <div class="legend-grid">
+      <div class="legend-item">
+        <div class="legend-num">1</div>
+        <div class="legend-body">
+          <h3>synchronous_commit = on</h3>
+          <p>Cửa hàng thường không có UPS — mất điện giữa lúc ghi là mất một giao dịch tiền thật.
+          Không được tắt để tối ưu tốc độ, dù nhiều hướng dẫn Postgres khuyên vậy.</p>
+          <span class="ref-tag">08 §2.1</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">2</div>
+        <div class="legend-body">
+          <h3>Autovacuum riêng cho outbox</h3>
+          <p><span class="mono">outbox</span> là bảng duy nhất có mẫu sinh bloat (insert → update → delete).
+          Cần <span class="mono">autovacuum_vacuum_scale_factor</span> thấp + partial index chỉ trên dòng chưa gửi.</p>
+          <span class="ref-tag">05 §3.5</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">3</div>
+        <div class="legend-body">
+          <h3>traceparent trong payload outbox</h3>
+          <p>Đơn chốt lúc 10h, đồng bộ lúc 14h — mặc định là hai trace rời nhau. Lưu W3C trace context vào
+          outbox, khôi phục bằng <b>span link</b> (không phải quan hệ cha–con) khi worker xử lý.</p>
+          <span class="ref-tag">10 §4 · ADR-009</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">4</div>
+        <div class="legend-body">
+          <h3>Tự động tạo partition trước</h3>
+          <p>Postgres không tự tạo partition tương lai cho <span class="mono">point_ledger</span>. Hết partition
+          của tháng sau = mọi INSERT lỗi = toàn hệ thống điểm chết. Dùng <span class="mono">pg_partman</span>, kiểm tra hằng ngày.</p>
+          <span class="ref-tag">08 §4.1</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">5</div>
+        <div class="legend-body">
+          <h3>Xếp hạng theo lifetime_earned</h3>
+          <p>Không theo <span class="mono">balance</span> hiện tại. Nếu xếp hạng theo số dư, khách tiêu điểm sẽ
+          bị tụt hạng — trải nghiệm rất tệ và gây khiếu nại.</p>
+          <span class="ref-tag">ADR-002</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">6</div>
+        <div class="legend-body">
+          <h3>Bronze phân vùng theo recorded_at</h3>
+          <p>Theo <b>ngày nạp</b>, không theo <span class="mono">occurred_at</span> (ngày phát sinh). Cửa hàng
+          offline 3 ngày rồi mới đồng bộ vẫn không phải viết lại lịch sử của lake.</p>
+          <span class="ref-tag">ADR-008 §C3</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">7</div>
+        <div class="legend-body">
+          <h3>insert_deduplication_token</h3>
+          <p>Là cơ chế idempotency <b>chính</b> của ClickHouse — không phải <span class="mono">ReplacingMergeTree</span>,
+          vốn chỉ "eventual" và vẫn có thể trả dòng trùng nếu không đọc bằng <span class="mono">FINAL</span>.</p>
+          <span class="ref-tag">ADR-005</span>
+        </div>
+      </div>
+      <div class="legend-item">
+        <div class="legend-num">8</div>
+        <div class="legend-body">
+          <h3>fact_payment tách bảng riêng</h3>
+          <p>Một đơn có N dòng sản phẩm và M hình thức thanh toán. Gộp chung vào
+          <span class="mono">fact_sale_line</span> tạo tích Descartes — nhân doanh thu lên N×M lần khi join.</p>
+          <span class="ref-tag">05 §7</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="stack">
+    <h2>Tech stack theo tầng</h2>
+    <p class="section-note">Toàn bộ công nghệ đã chốt, kèm lý do trong <span class="mono">docs/07-stack-decision.md</span>.
+    Pill viền nét đứt là ưu tiên <i>Could</i> — cắt được nếu lộ trình siết chặt.</p>
+    <div class="stack-grid">
+      <div class="layer"><span class="layer-tag" style="background:var(--lane-store)"></span>Cửa hàng</div>
+      <div class="techs">
+        <span class="tech-pill">PostgreSQL 18</span><span class="tech-pill">Redis 7</span>
+        <span class="tech-pill">FastAPI</span><span class="tech-pill">HTMX + Alpine.js</span>
+      </div>
+      <div class="layer"><span class="layer-tag" style="background:var(--lane-central)"></span>Trung tâm</div>
+      <div class="techs">
+        <span class="tech-pill">PostgreSQL 18</span><span class="tech-pill">FastAPI</span>
+      </div>
+      <div class="layer">Đồng bộ</div>
+      <div class="techs">
+        <span class="tech-pill">Transactional Outbox + HTTP</span>
+        <span class="tech-pill would">Redpanda + CDC (v2)</span>
+      </div>
+      <div class="layer"><span class="layer-tag" style="background:var(--lane-data)"></span>Dữ liệu</div>
+      <div class="techs">
+        <span class="tech-pill">MinIO + Parquet</span><span class="tech-pill">Airflow 3 (LocalExecutor)</span>
+        <span class="tech-pill">astronomer-cosmos</span><span class="tech-pill">dbt-core</span>
+        <span class="tech-pill">ClickHouse</span><span class="tech-pill would">Metabase</span>
+      </div>
+      <div class="layer">Giám sát</div>
+      <div class="techs">
+        <span class="tech-pill">OpenTelemetry</span><span class="tech-pill">grafana/otel-lgtm</span>
+        <span class="tech-pill">pg_stat_statements</span><span class="tech-pill">system.query_log</span>
+      </div>
+      <div class="layer">Nền</div>
+      <div class="techs">
+        <span class="tech-pill">Python 3.12 · uv</span><span class="tech-pill">SQLAlchemy 2 async + Alembic</span>
+        <span class="tech-pill">pytest + testcontainers</span><span class="tech-pill">ruff · mypy</span>
+        <span class="tech-pill">import-linter</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Nguồn: <span class="mono">docs/03-architecture</span> · <span class="mono">05-data-model</span> ·
+    <span class="mono">07-stack-decision</span> · <span class="mono">08-reliability-and-scale</span> ·
+    <span class="mono">10-observability</span> · <span class="mono">11-design-readiness</span> ·
+    <span class="mono">adr/001–009</span> · <span class="mono">business/01–04</span>.
+    Ưu tiên số 1: hệ thống chạy ổn định, khả năng scale tốt — đứng trên độ đầy đủ tính năng.
+  </footer>
+
+</div>

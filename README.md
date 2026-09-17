@@ -1,186 +1,108 @@
 # retail-sync
 
-Bộ công cụ đồng bộ dữ liệu bán lẻ (retail-sync)
+Hệ thống dữ liệu cho chuỗi cửa hàng bán lẻ: **POS** (đơn hàng + khách hàng) và **Loyalty**
+(tích điểm), kèm tầng phân tích trung tâm.
 
-Mô tả ngắn
----------------
-`retail-sync` là một dự án ETL/streaming nhỏ phục vụ việc thu thập, tiền xử lý và đồng bộ dữ liệu bán lẻ từ các cửa hàng vào kho dữ liệu trung tâm. Dự án gồm các thành phần chính: dịch vụ thu thập cửa hàng (`store`), dịch vụ xử lý trung tâm (`central`), thư viện dùng chung và các notebooks hỗ trợ thu thập dữ liệu.
+> ⚠️ **Đang viết code v2** trong `packages/` — thiết kế đã hoàn tất, **tuần 1 đã đóng
+> cổng** (2026-09-18), đang ở đầu tuần 2. Code trong `store/` và `central/` là prototype
+> v1 — chỉ để tham khảo, không phát triển tiếp trên đó.
+> **Đọc [docs/README.md](docs/README.md) trước khi làm bất cứ việc gì**, và
+> [docs/progress/](docs/progress/) để biết đã làm tới đâu mà không cần đọc lại toàn repo.
 
-Mục lục
----------
-- Giới thiệu
-- Kiến trúc & Thành phần
-- Cấu trúc thư mục
-- Yêu cầu
-- Cài đặt & Chạy nhanh (PowerShell)
-- Phát triển & Gỡ lỗi
-- Dữ liệu và persistent volumes
-- Góp phần & Liên hệ
-- License
+## Bắt đầu từ đâu
 
-Kiến trúc & Thành phần (chi tiết)
--------------------------------
-Mục tiêu kiến trúc:
-- Thu thập dữ liệu bán hàng từ nhiều cửa hàng (edge) theo thời gian thực hoặc theo batch.
-- Tiền xử lý, làm sạch và chuyển đổi dữ liệu trước khi lưu vào kho dữ liệu phân tích.
-- Hệ thống dễ mở rộng, có thể chạy local bằng Docker Compose cho dev và deploy lên môi trường container/cluster cho production.
+| Bạn là ai | Đọc gì trước |
+|---|---|
+| Muốn hiểu dự án làm gì, cho ai | [docs/00-context.md](docs/00-context.md) |
+| Muốn xem sơ đồ tổng quan trực quan | [docs/diagrams/system-overview.html](docs/diagrams/system-overview.html) *(mở bằng trình duyệt)* |
+| Muốn biết stack dùng gì, vì sao | [docs/07-stack-decision.md](docs/07-stack-decision.md) |
+| Sắp viết code | [docs/11-design-readiness.md](docs/11-design-readiness.md) |
+| Muốn biết đã làm tới đâu (không đọc lại toàn repo) | [docs/progress/](docs/progress/) — mới nhất: [2026-09-18-tong-ket-tuan-1.md](docs/progress/2026-09-18-tong-ket-tuan-1.md) |
+| Claude Code / AI agent | [CLAUDE.md](CLAUDE.md) |
 
-Thành phần chính:
-- `Store (edge)` — thư mục `store/`
-	- Mô phỏng POS/endpoint tại cửa hàng. Thu thập dữ liệu đơn hàng, trạng thái, sự kiện POS.
-	- Gửi dữ liệu lên trung tâm bằng HTTP/gRPC hoặc đẩy vào message broker (nếu cấu hình).
-	- Chạy độc lập cho mỗi cửa hàng; có thể scale theo số lượng cửa hàng.
+## Trạng thái
 
-- `Central (ingest & ETL)` — thư mục `central/`
-	- Chịu trách nhiệm nhận dữ liệu, lưu tạm, xử lý theo DAG (mô phỏng Airflow), và nạp vào kho dữ liệu (ClickHouse, Cassandra, v.v.).
-	- Có thể bao gồm component: API ingest, worker xử lý, scheduler DAGs và task runners.
+| Thư mục | Trạng thái |
+|---|---|
+| `docs/` | Thiết kế v2 — **21 tài liệu + 9 ADR**, giai đoạn phân tích đã hoàn tất |
+| `docs/progress/` | Nhật ký tiến độ theo tuần — tuần 1 đã đóng cổng (2026-09-18) |
+| `store/`, `central/` | Prototype v1 — tham khảo, không phát triển tiếp. Xem [docs/09-v1-postmortem.md](docs/09-v1-postmortem.md) |
+| `crawl_data/` | Dữ liệu sản phẩm/cửa hàng thật — đã seed vào v2 (5556 sản phẩm, 3515 cửa hàng) |
+| `packages/` | **Source v2** — tuần 1 xong: PlaceSale, Loyalty, auth JWT, UI POS, OTel. Tuần 2 đang viết: sync worker, đồng bộ, trả hàng/ca/báo cáo |
+| `data_platform/` | Airflow DAG + dbt (lớp C, T+1) — chưa có nội dung, thuộc tuần 3 |
+| `infra/` | Compose 5 profile chạy được thật (`edge`/`central`/`data`/`bi`/`observability`) |
+| `tests/` | unit · integration (testcontainers) · scenarios — 220/220 pass, bản đồ ở [docs/16](docs/16-test-plan.md) |
 
-- `Data Stores` — thư mục `data/` chứa volumes cho databases
-	- Cassandra: lưu dữ liệu trạng thái/transaction cần khả năng ghi cao và phân tán.
-	- ClickHouse: dùng cho phân tích OLAP, báo cáo thời gian thực.
+## Ưu tiên số 1
 
-- `libs/`
-	- Thư viện dùng chung (domain models, adapters, use_cases) để tránh trùng lặp logic giữa `store` và `central`.
+> **Hệ thống chạy ổn định, khả năng scale tốt** — đứng trên độ đầy đủ tính năng.
 
-- `Auxiliary services`
-	- Các service phụ trợ như `pos_service/`, `loyalty_service/` cung cấp ví dụ cách tích hợp tính năng miền.
+Xem [docs/08-reliability-and-scale.md](docs/08-reliability-and-scale.md).
 
-Luồng dữ liệu (data flow) — mô tả sơ đồ
-1) Tại cửa hàng (`store`) dữ liệu đơn hàng sinh ra (event).
-2) `store` gửi event tới endpoint ingest ở `central` (hoặc publish tới broker).
-3) `central` nhận, xác thực, ghi tạm (buffer) và enqueue task xử lý.
-4) Worker thực hiện ETL: validate, enrich (vd: join thông tin cửa hàng, product mapping), và persist vào Cassandra/ClickHouse.
-5) Jobs định kỳ (DAGs) thực hiện aggregation, cleanup, xuất báo cáo.
+## Chạy thử (spike / phát triển)
 
-ASCII diagram (đơn giản):
+Cần [uv](https://docs.astral.sh/uv/) và Docker Desktop.
 
-```
- [Store (many)] --> [Central API Ingest] --> [Buffer/Queue] --> [Workers/ETL] --> [Cassandra / ClickHouse]
-												 |                                              ^
-												 v                                              |
-										[Monitoring / Logs] -------------------------------+
+```bash
+cp infra/.env.example infra/.env   # điền giá trị thật — KHÔNG commit
+uv sync --all-extras --dev         # cài dependency (Python 3.12)
+make lint test                     # ruff + mypy + ranh giới module + unit test
+make up                            # docker compose --profile edge --profile central
 ```
 
-Giao diện & Protocols
-- Ingest API: HTTP(S) JSON hoặc gRPC (tùy cấu hình). Payload nên có trace_id/timestamp để dễ debug.
-- Worker <-> DB: sử dụng official drivers (Cassandra, ClickHouse).
-- Internal comms: REST/gRPC hoặc message broker (Kafka/Redis Streams) nếu cần throughput lớn.
+`make help` liệt kê đầy đủ lệnh. Không có `make` trên Windows? Mở
+[Makefile](Makefile) và gõ thẳng lệnh `uv run ...` tương ứng.
 
-Ports & Compose mapping (ví dụ dev)
-- `central` API: 8000
-- `store` demo: 5000
-- Cassandra: 9042
-- ClickHouse: 8123 / 9000
+Xem đầy đủ các profile (`edge`, `central`, `data`, `bi`, `observability`) trong
+[infra/compose.yaml](infra/compose.yaml) và [docs/06-roadmap.md](docs/06-roadmap.md) (mục
+"Ngày 0 — Spike xác minh").
 
-Khả năng mở rộng & Triển khai
-- Dev: Docker Compose (đã có `central/docker-compose.yml` và `store/docker-compose.yaml`).
-- Staging/Prod: containerize từng service và deploy lên Kubernetes / ECS / Docker Swarm.
-- Scale:
-	- Tăng số instance `store` để mô phỏng nhiều cửa hàng.
-	- Scale worker pool ngang (replica) để xử lý throughput cao.
-	- Sử dụng message broker để tách ingest và processing nhằm tăng độ bền và khả năng backpressure.
+## Bản đồ source
 
-Resilience & Fault Tolerance
-- Sử dụng queue/buffer để tránh mất dữ liệu khi downstream bị chậm.
-- Lưu temporary events vào disk/volume trước khi ack nếu cần đảm bảo at-least-once.
-- Thực hiện retry/backoff cho các thao tác truy vấn DB và gửi mạng.
+```
+packages/
+├── shared/           hợp đồng sự kiện (docs/12), config nghiệp vụ, outbox, tracing, db
+├── edge/             ứng dụng cửa hàng — modular monolith (ADR-004)
+│   ├── pos/            domain · application/ports.py · adapters   ← ranh giới nghiêm ngặt
+│   ├── loyalty/        domain · application · adapters · api.py (cửa duy nhất pos đi qua)
+│   ├── reporting/      lớp truy vấn A — đọc thẳng PG cửa hàng, chạy được khi offline
+│   ├── web/             UI POS — HTMX + Alpine vendor cục bộ (không CDN), gọi use case thật
+│   ├── sync/            outbox worker (tiến trình riêng)
+│   ├── ops/             seed dữ liệu từ crawl_data/
+│   └── migrations/      Alembic — schema cửa hàng
+└── central/          ingest (idempotency) · lookup · reporting · ops (seed, bảo trì partition) · migrations
 
-Observability
-- Logs: cấu hình logs cho mỗi service (stdout -> docker logs). Gợi ý forward logs vào ELK/Prometheus + Grafana cho production.
-- Metrics: expose Prometheus metrics từ API/worker (request latencies, queue length, processed count).
-- Tracing: thêm trace_id trong payload để theo dõi end-to-end.
-
-Bảo mật
-- Tất cả API ingest nên xác thực (API key / JWT) khi ra production.
-- Dữ liệu nhạy cảm (PII) phải mã hóa khi lưu hoặc mask trước khi gửi ra analytics.
-
-Cấu hình & môi trường
-- Các giá trị cấu hình (DB URL, credentials, API keys) lưu ở environment variables hoặc secrets store.
-- Trong Docker Compose dev, đặt các biến trong `.env` (không commit).
-
-Lưu ý vận hành
-- Backup các DB quan trọng (Cassandra snapshot / ClickHouse backup).
-- Giám sát disk/IO, vì ClickHouse và Cassandra có yêu cầu I/O mạnh.
-- Sơn màu path Windows/OneDrive: tránh mount dữ liệu DB trực tiếp vào OneDrive để giảm rủi ro corruption.
-
-Tích hợp CI/CD (gợi ý)
-- Pipeline build image, chạy lint/tests, đẩy image lên registry.
-- Pipeline deploy cho staging/prod (kubectl/helm/az-cli/gitops...).
-
-Phần mở rộng
-- Nếu muốn, mình có thể bổ sung sơ đồ kiến trúc có hình (mermaid/PlantUML) và hướng dẫn triển khai Kubernetes (manifests/Helm charts).
-
-
-Cấu trúc thư mục (tóm tắt)
---------------------------
-Ví dụ một số thư mục chính:
-
-- `central/` - DAGs, docker-compose cho môi trường trung tâm
-- `store/` - service cửa hàng, docker-compose
-- `libs/` - thư viện nội bộ
-- `data/` - dữ liệu persistent (Cassandra, ClickHouse,...)
-- `plugins/`, `logs/` - plugin và log cho runtime
-- `crawl_data/` - notebooks & script thu thập dữ liệu từ web
-
-Yêu cầu
---------
-- Docker & Docker Compose
-- Python 3.8+ (nếu chạy scripts/notebooks cục bộ)
-- (Tùy chọn) Cassandra / ClickHouse nếu muốn chạy full stack cục bộ
-
-Cài đặt & Chạy nhanh (PowerShell)
-----------------------------------
-Từ root repository trên Windows PowerShell, ví dụ các lệnh khởi chạy môi trường dev:
-
-1) Khởi dịch vụ trung tâm (central):
-
-```powershell
-cd central; docker-compose up -d
+data_platform/        airflow/dags · dbt · seeds
+simulator/            sinh tải, mô phỏng nhiều cửa hàng (LD-1..4, CH-6)
+infra/docker/         app.Dockerfile (chung cho 3 service) + airflow.Dockerfile
+tests/                unit · integration (testcontainers) · scenarios · load
 ```
 
-2) Khởi dịch vụ cửa hàng (store):
+Ranh giới module được cưỡng chế bằng `import-linter` ([.importlinter](.importlinter)) trong
+CI — không dựa vào kỷ luật con người (ADR-004).
 
-```powershell
-cd store; docker-compose up -d
+API Edge đã có `/health`, `/api/v1/auth/login`, `/api/v1/sales`, `/ui/*` (UI POS HTMX) chạy
+thật; Central API có `/health`. Route còn thiếu (`POST /events`, `/returns`, `/shifts`,
+`/reports`) thuộc tuần 2 — xem [docs/progress/](docs/progress/) cho danh sách đầy đủ. Hợp
+đồng đường dẫn, vai trò và mã lỗi nằm ở [docs/13-api-contracts.md](docs/13-api-contracts.md).
+
+## Bản đồ tài liệu
+
+```
+docs/
+├── README.md              ← mục lục đầy đủ, đọc từ đây
+├── 00-context ... 11-design-readiness    (yêu cầu, kiến trúc, stack, lộ trình)
+├── 12-event-schema         hợp đồng sự kiện outbox
+├── 13-api-contracts        route Edge API / Central API
+├── 14-sequence-flows       4 luồng còn lại (trả hàng, kéo master data, chốt ca, đồng bộ lỗi)
+├── 15-glossary             thuật ngữ dùng thống nhất
+├── 16-test-plan            bản đồ AT/CH/LD/DI → file test
+├── adr/                    9 Architecture Decision Record
+├── business/                phân tích nghiệp vụ & vận hành thực tế
+└── diagrams/                sơ đồ trực quan (HTML, mở bằng trình duyệt)
 ```
 
-3) Kiểm tra logs (ví dụ):
-
-```powershell
-docker-compose -f central\docker-compose.yml logs -f
-docker-compose -f store\docker-compose.yaml logs -f
-```
-
-Ghi chú: Nếu bạn sử dụng OneDrive/Windows paths dài, hãy đảm bảo Docker có quyền truy cập vào thư mục workspace và path không quá dài (Windows MAX_PATH).
-
-Phát triển & Gỡ lỗi
--------------------
-- Chạy unit tests (nếu có): thêm command test tương ứng (pytest/unittest) vào `store` hoặc `central` khi cần.
-- Chạy notebooks: mở `*.ipynb` bằng Jupyter/VS Code.
-- Khi sửa code trong `libs/`, mount volume hoặc restart container để load thay đổi.
-
-Dữ liệu & Persistent volumes
-----------------------------
-- Thư mục `data/` chứa dữ liệu cho các DB cục bộ (Cassandra, ClickHouse...). Không commit dữ liệu sản xuất lên git.
-- Backup/restore: tuỳ theo DB, dùng snapshot/backup chính thức (Cassandra snapshot, ClickHouse dump).
-
-Góp phần
---------
-1. Fork repository
-2. Tạo branch feature/bugfix
-3. Mở pull request với mô tả rõ ràng
-
-Vui lòng tuân thủ coding style hiện có và thêm test cho thay đổi logic quan trọng.
-
-Liên hệ
--------
-Nếu cần trợ giúp, mở issue trên repository hoặc liên hệ trực tiếp với người maintain dự án (thông tin liên hệ / Slack/Email nếu có trong org).
-
-License
--------
-Mặc định chưa có file license trong repository. Nếu bạn muốn public, cân nhắc thêm `LICENSE` (MIT/Apache-2.0) và cập nhật phần này.
-
-Ghi chú cuối
-------------
-README này cung cấp hướng dẫn nhanh để bắt đầu làm việc với `retail-sync`. Nếu bạn cần mình mở rộng phần cấu trúc chi tiết của từng service, ví dụ file cấu hình Docker Compose, cách chạy DAGs, hoặc tạo script seed dữ liệu — cho mình biết, mình sẽ bổ sung.
-
+---
+*README này thay thế bản mô tả kiến trúc v1 cũ (MySQL/Cassandra/Kafka/Airflow LocalExecutor
+4 container) — đã lỗi thời so với quyết định trong `docs/`. Xem
+[docs/09-v1-postmortem.md](docs/09-v1-postmortem.md) nếu cần đối chiếu.*

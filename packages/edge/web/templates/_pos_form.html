@@ -1,0 +1,48 @@
+<div id="pos-form-wrapper">
+  {# Giỏ hàng nằm ở SERVER, đi vòng qua client bằng MỘT hidden field JSON — đúng triết lý
+     HTMX: server là nguồn sự thật, không cần Alpine/JS quản lý state giỏ hàng. #}
+  <input type="hidden" id="cart-data" name="cart_json" value='{{ cart_json }}'>
+
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+  <div class="row">
+    <input type="text" name="barcode" id="barcode-input" placeholder="Quét mã vạch"
+           x-data x-init="$nextTick(() => $el.focus())"
+           hx-post="{{ scan_url }}" hx-include="#cart-data, #barcode-input"
+           hx-target="#pos-form-wrapper" hx-swap="outerHTML" hx-trigger="keyup[key=='Enter']">
+    <button hx-post="{{ scan_url }}" hx-include="#cart-data, #barcode-input"
+            hx-target="#pos-form-wrapper" hx-swap="outerHTML">Thêm</button>
+  </div>
+
+  <table>
+    <thead><tr><th>Sản phẩm</th><th>SL</th><th>Đơn giá</th><th>Thành tiền</th><th></th></tr></thead>
+    <tbody>
+      {% for line in cart %}
+      <tr>
+        <td>{{ line.name }}</td>
+        <td>{{ line.quantity }}</td>
+        <td>{{ line.unit_price|money }}</td>
+        <td>{{ (line.unit_price * line.quantity)|money }}</td>
+        <td>
+          <button hx-post="{{ remove_url }}" hx-include="#cart-data" hx-vals='{"line_no": {{ loop.index0 }}}'
+                  hx-target="#pos-form-wrapper" hx-swap="outerHTML">Xóa</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">Chưa có sản phẩm nào — quét mã vạch để bắt đầu</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="total">Tổng: {{ subtotal|money }}</p>
+
+  {% if cart %}
+  <div class="row">
+    <label>Khách đưa
+      <input type="number" id="tendered-input" name="tendered_amount" min="{{ subtotal }}" value="{{ subtotal }}">
+    </label>
+    <button hx-post="{{ checkout_url }}" hx-include="#cart-data, #tendered-input"
+            hx-target="body" hx-swap="innerHTML">Thanh toán (tiền mặt)</button>
+  </div>
+  {% endif %}
+</div>
