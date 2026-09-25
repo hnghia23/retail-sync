@@ -3,6 +3,11 @@
 > **Trạng thái:** ✅ Giai đoạn **phân tích & quyết định** đã hoàn tất (2026-09-11).
 > ✅ Phần lớn giai đoạn **thiết kế chi tiết** cũng đã xong (2026-09-12) — xem §6.
 > Còn lại là sản phẩm của việc viết code, không phải tài liệu thiết kế.
+>
+> 🔀 **Đổi hướng 2026-09-23 — [ADR-010](adr/010-data-flow-first.md):** luồng dữ liệu trước (A),
+> chứng minh ổn định (B), tính năng sau (C). Điểm vào cho code tiếp theo là
+> [17-data-flow](17-data-flow.md) (bản đồ luồng + 5 bẫy phải xử lý) và
+> [18-simulator](18-simulator.md) (nguồn dữ liệu thay UI).
 
 ---
 
@@ -49,7 +54,7 @@ module.**
 | # | Ràng buộc | Nguồn |
 |---|---|---|
 | 1 | **`synchronous_commit = on`** ở Postgres cửa hàng — không được tắt để tối ưu | Cửa hàng không có UPS ([B02 I01](business/02-edge-cases.md)) |
-| 2 | **Tự động tạo partition** `point_ledger` trước 3 tháng + kiểm tra hằng ngày | Rủi ro sập cao nhất ([08 §4.1](08-reliability-and-scale.md)) |
+| 2 | **Tự động tạo partition** `point_ledger` trước 3 tháng + **giữ tháng trước** (migration `0006`) + kiểm tra hằng ngày | Rủi ro sập cao nhất ([08 §4.1](08-reliability-and-scale.md)) |
 | 3 | **Bronze phân vùng theo `recorded_at`** (ngày nạp), không theo `occurred_at` | Dữ liệu đến trễ không phải viết lại lịch sử ([ADR-008 C3](adr/008-remaining-decisions.md)) |
 | 4 | **`insert_deduplication_token`** là cơ chế idempotency chính của ClickHouse | `ReplacingMergeTree` chỉ eventual ([ADR-005](adr/005-clickhouse-warehouse.md)) |
 | 5 | **`fact_payment` tách riêng** khỏi `fact_sale_line` | Gộp chung → nhân doanh thu N×M lần ([05 §7](05-data-model.md)) |
@@ -152,9 +157,21 @@ Sau khi hoàn tất §4, các mục sau đã được viết:
 | OpenTelemetry auto-instrumentation | ✅ Xong — FastAPI + asyncpg + Redis, idempotent qua nhiều lần `create_app()`. Xác minh thật: trace `edge-api`/`central-api` thấy được qua Tempo (docs/06 spike S5) |
 | `pg_stat_statements` | ✅ Xong — bật cho mọi Postgres qua `shared_preload_libraries`, `track=all` để thấy cả câu lệnh trong PL/pgSQL. Xác minh thật: bắt được `ensure_point_ledger_partitions()` 23.68ms |
 | **→ Tuần 1 đã đóng cổng (2026-09-18)** — xem docs/06-roadmap.md, tổng kết đầy đủ ở [docs/progress/2026-09-18-tong-ket-tuan-1.md](progress/2026-09-18-tong-ket-tuan-1.md) | |
-| Tra khách qua Redis + trung tâm (bước 1 và 3 của docs/13 §4) | ⏳ Chưa — tuần 2 ngày 9 |
-| `POST /returns`, `/shifts`, `/reports` | ⏳ Chưa — tuần 2 ngày 10 (`POST /shifts/open` hiện có bản UI tạm ở `/ui/shifts/open`, sẽ bị thay) |
-| Sync worker đẩy outbox | ⏳ Chưa — tuần 2 ngày 8 |
+| Sync worker đẩy outbox + Central `POST /events` | ✅ Xong (2026-09-23) — [nhật ký](progress/2026-09-23-tuan-2-dong-bo.md) |
+| **→ Đổi hướng theo ADR-010 (2026-09-23)** — các mục dưới xếp theo giai đoạn | |
+| `POST /customers`, `POST /shifts/open`, `POST /shifts/{id}/close` (use case + route, không UI) | ✅ Xong (2026-09-23) — kèm seed nhân viên hai phía; route tạm `/ui/shifts/open` gọi cùng use case |
+| Bộ giả lập ([18](18-simulator.md)) | ✅ Xong phần **A** (2026-09-24) — chế độ `edge` (3 cửa hàng thật) + `virtual` (20 cửa hàng ảo, tật `offline`/`resend`/`concurrent_customer`), manifest, audit L0…L4. Chế độ `bulk` + tật còn lại: **B** |
+| Đối soát INV-4 tăng dần | ✅ Xong (2026-09-23) — `central.ops.reconcile` + bảng `reconciliation_drift` |
+| Bẫy 1–4 của luồng dữ liệu ([17 §4](17-data-flow.md)) | ✅ Xong (2026-09-23) — migration `0004`, `extract_horizon()`, `transaction_timeout`, `packages/pipeline/ddl/bronze.sql` (chuyển từ `data_platform/clickhouse/` ngày 2026-09-24); 21 test mới, kiểm đột biến |
+| Trích xuất → bronze → ClickHouse ([17](17-data-flow.md)) | ✅ Xong (2026-09-24) — `packages/pipeline/` (S4 + S5), chạy thật trên compose, audit L3 `CONVERGED` |
+| dbt S6 + Airflow DAG | ✅ Xong (2026-09-24) — `data_platform/dbt/` (staging → 6 dim + 3 fact, 32 test, bẫy 5), DAG `retail_pipeline` (Airflow 3.3.2 + cosmos 1.15) chạy theo lịch trên compose |
+| `tests/scenarios/` AT-01…04, 07, 10, DI-1…3 | ✅ Xong (2026-09-24) — chạy trên compose thật (opt-in `make test-scenarios`); CI chưa có job compose → **B** |
+| **→ 🚪 Cổng A đạt (2026-09-24)** — [progress/2026-09-24-cong-a.md](progress/2026-09-24-cong-a.md) | |
+| Dashboard "sức khỏe luồng" ([17 §6](17-data-flow.md)) | ⏳ **B** — việc đầu tiên (Must của A, dời sang vì không thuộc điều kiện cổng) |
+| Test hỗn loạn CH-1…7, tải LD-1…4, ngâm 72h | ⏳ **B** |
+| Trả hàng (không UI) | ⏸ **A — Should, đã cắt** theo phương án "nếu trượt" của cổng A; làm lại khi có thời gian ở B hoặc ở C |
+| Tra khách qua Redis + trung tâm (bước 1 và 3 của docs/13 §4) | ⏸ **C** |
+| `/reports`, UI mới | ⏸ **C** |
 
 ---
 
@@ -164,12 +181,15 @@ Thành thật về giới hạn của bộ docs này:
 
 | Chưa biết | Khi nào biết | Có chặn thiết kế không? |
 |---|---|---|
-| RAM thật của cả stack | Spike ngày 0 | ❌ Không — chỉ đổi số cửa hàng mô phỏng |
-| Airflow 3 + cosmos + ClickHouse có phối hợp trơn không | Spike ngày 0 | ❌ Không — có phương án `BashOperator` |
+| ~~RAM thật của cả stack~~ | ✅ Đã biết (2026-09-24) — 3 cửa hàng + trung tâm + data platform (20 container): ~3,4 GiB, đỉnh 3,9 GiB giữa lượt DAG | — |
+| ~~Airflow 3 + cosmos + ClickHouse có phối hợp trơn không~~ | ✅ Đã biết (2026-09-24) — trơn, sau 3 cấu hình cosmos bắt buộc ([06 §Ngày 0](06-roadmap.md) S3) | — |
 | `uuidv7()` qua SQLAlchemy 2 async có ổn không | Spike ngày 0 | ❌ Không — có phương án sinh ở tầng Python |
-| Overhead của OpenTelemetry | Tuần 4 | ❌ Không |
-| Ngưỡng Postgres thật (12 Tr dòng?) | Tuần 4 | ❌ Không — chỉ ảnh hưởng thời điểm cần ClickHouse |
-| 4 tuần có đủ không | Hết tuần 2 | ⚠️ **Có** — cổng tuần 2 là điểm quyết định cắt phạm vi |
+| Overhead của OpenTelemetry | Giai đoạn B | ❌ Không |
+| Ngưỡng Postgres thật (12 Tr dòng?) | Giai đoạn B | ❌ Không — chỉ ảnh hưởng thời điểm cần ClickHouse |
+| 4 tuần có đủ không | Cổng A đạt 2026-09-24, cắt trả hàng (Should) | ⚠️ Phạm vi B quyết định theo thời gian còn lại |
+| ~~Watermark `recorded_at` có thật sự không lọt dòng~~ | ✅ Đã biết (2026-09-23) — `extract_horizon()`, test dựng lại đúng kịch bản lọt dòng | — |
+| ~~`insert_deduplication_token` hành xử đúng như doc~~ | ✅ Đã biết (2026-09-23) — **không** đúng như doc giả định ở 3 điểm, xem [17 §4](17-data-flow.md) bẫy 4 | — |
+| ~~`s3()` từ MinIO có tách khối tất định giữa hai lần chạy~~ | ✅ Đã biết (2026-09-24) — nạp với `max_threads=1`, chạy lại không nhân đôi; kèm hash nội dung làm lớp thứ hai | — |
 
 **Không có ẩn số nào chặn việc bắt đầu thiết kế.** Mọi thứ chưa biết đều chỉ ảnh hưởng *cách
 triển khai*, không ảnh hưởng *cấu trúc*.
@@ -196,9 +216,11 @@ triển khai*, không ảnh hưởng *cấu trúc*.
 14-sequence-flows    4 luồng còn thiếu: trả hàng, master data, chốt ca, đồng bộ lỗi
 15-glossary          Thuật ngữ dùng thống nhất
 16-test-plan         Bản đồ AT/CH/LD/DI → file test
+17-data-flow         ⭐ Luồng dữ liệu đầu-cuối: 6 chặng, 5 bẫy, đối soát xuyên tầng, "ổn định" đo thế nào
+18-simulator         ⭐ Bộ giả lập: 3 chế độ, mô hình sinh dữ liệu, manifest đáp án
 99-original-spec     Spec gốc nguyên văn
 
-adr/001..009         Vì sao — kèm phương án đã loại và điều kiện xem lại
+adr/001..010         Vì sao — kèm phương án đã loại và điều kiện xem lại (010: luồng dữ liệu trước)
 business/B01..B04    Vận hành thật, ~50 tình huống, workload phân tích, hệ quả stack
 
 infra/compose.yaml   Compose scaffold theo profile (edge/central/data/bi/observability)
@@ -206,7 +228,14 @@ infra/.env.example   Mẫu biến môi trường
 ```
 
 **Nếu chỉ đọc được ba doc:** [07-stack-decision](07-stack-decision.md) *(quyết định gì và vì
-sao)* · [05-data-model](05-data-model.md) *(dữ liệu trông ra sao)* · doc này *(làm gì tiếp)*.
+sao)* · [05-data-model](05-data-model.md) *(dữ liệu trông ra sao)* ·
+[17-data-flow](17-data-flow.md) *(đang làm gì, và làm thế nào cho đúng)*.
 
 ---
+*Changelog: 2026-09-25 — §6: bộ giả lập, dbt + Airflow, `tests/scenarios/` xong; cổng A đạt;
+việc của B. §7: RAM thật và Airflow + cosmos đã biết.*
+
+*Changelog: 2026-09-23 — đổi hướng theo ADR-010: §6 xếp việc còn lại theo giai đoạn A/B/C, thêm
+17/18 vào bản đồ docs, thêm 2 ẩn số của luồng dữ liệu vào §7.*
+
 *Changelog: 2026-09-11 — tạo mới, chốt giai đoạn phân tích.*

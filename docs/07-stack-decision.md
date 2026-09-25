@@ -6,6 +6,12 @@
 > Trạng thái: ✅ **ĐÃ CHỐT TOÀN BỘ** · 2026-09-11. Kiểm chứng thực nghiệm sẽ làm ở spike
 > ngày 0 ([06-roadmap](06-roadmap.md)) — chốt kịch bản trước theo yêu cầu của chủ dự án.
 
+> 🔀 **2026-09-23 — [ADR-010](adr/010-data-flow-first.md) không đổi stack**, chỉ đổi thứ tự làm
+> (luồng dữ liệu trước, tính năng sau). Hai điều chỉnh công cụ nhỏ đi kèm: test tải dùng **bộ
+> giả lập** thay `k6` ([18 §9](18-simulator.md)); silver trong POC là **staging dbt trong
+> ClickHouse**, không phải Parquet thứ hai ([17 §2](17-data-flow.md)). HTMX + Alpine vẫn là lựa
+> chọn cho UI, chỉ là UI mới dời sang giai đoạn C.
+
 ## Cách đọc
 
 | Ký hiệu | Nghĩa |
@@ -329,6 +335,11 @@ chứng.**
 | **Airflow 3** (webserver, scheduler, triggerer, dag-processor, worker + Postgres + Redis) | **7** | Docs chính thức: **≥ 4 GB, khuyến nghị 8 GB** |
 | **Dagster** | 1–2 | ~700 MB |
 
+> ✅ **Đo thật (2026-09-24):** Airflow 3.3.2 LocalExecutor chạy **4 container** (api-server,
+> scheduler, dag-processor, DB meta; bỏ triggerer), ~1,8 GB lúc nghỉ, scheduler đỉnh 2,1 GB. Cả
+> stack 3 cửa hàng + trung tâm + data platform: ~3,4 GiB, đỉnh 3,9 GiB ([02](02-scale-capacity.md)).
+> Nỗi lo "vượt trần" dưới đây không xảy ra với LocalExecutor.
+
 Airflow 3 **nặng hơn** Airflow 2 (tách `triggerer` và `dag-processor` ra riêng). Tổng stack
 v2 dự kiến ~5 GB trên máy 16 GB — **riêng Airflow ở mức khuyến nghị đã ăn 8 GB**. Cộng 3
 cửa hàng mô phỏng + ClickHouse + MinIO thì vượt trần.
@@ -472,4 +483,6 @@ Những điểm đã kiểm chứng bằng nguồn ngoài, vì knowledge cutoff 
 - [ElectricSQL vs PowerSync vs Zero (2026)](https://trybuildpilot.com/648-electric-sql-vs-powersync-vs-zero-2026) · [ClickHouse vs DuckDB 2026](https://tasrieit.com/blog/clickhouse-vs-duckdb-2026)
 
 ---
+*Changelog: 2026-09-25 — thêm số đo RAM thật của Airflow 3 cạnh phần ước lượng.*
+
 *Changelog: 2026-09-11 — tạo mới sau vòng nghiên cứu kiểm chứng.*

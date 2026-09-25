@@ -39,10 +39,50 @@ x-postgres-common: &postgres-common
     timeout: 5s
     retries: 10
 
+# Biến của `packages/pipeline` (S4/S5 + bộ giám sát luồng), cùng tên với CLI `python -m pipeline`
+# và profile dbt — dùng chung cho Airflow và `flow-monitor`, một chỗ khai báo.
+x-pipeline-env: &pipeline-env
+  PIPELINE_PG_DSN: postgresql://${CENTRAL_DB_USER:-central_app}:${CENTRAL_DB_PASSWORD}@central-db:5432/central
+  PIPELINE_WINDOW_SECONDS: ${PIPELINE_WINDOW_SECONDS:-3600}
+  PIPELINE_SAFETY_LAG_SECONDS: ${PIPELINE_SAFETY_LAG_SECONDS:-30}
+  LAKE_ENDPOINT: minio:9000
+  LAKE_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+  LAKE_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+  LAKE_URL_FOR_CLICKHOUSE: http://minio:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_HOST: clickhouse
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USER: ${CLICKHOUSE_USER:-dw}
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+  CLICKHOUSE_DB: dw
+
+# Airflow 3 (profile: data) — một image, nhiều tiến trình. Biến PIPELINE_*/LAKE_*/CLICKHOUSE_*
+# cùng tên với CLI `python -m pipeline` và profile dbt, để DAG và máy dev chạy cùng một code.
+x-airflow-common: &airflow-common
+  build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
+  image: retail-sync-airflow:3.3.2
+  profiles: ["data"]
+  restart: unless-stopped
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?bắt buộc đặt trong .env}
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+    # DAG chạy theo lịch ngay khi được đọc: đây là luồng dữ liệu cần chạy, không phải ví dụ.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
+    PIPELINE_SCHEDULE: ${PIPELINE_SCHEDULE:-5 * * * *}
+    <<: *pipeline-env
+  volumes:
+    - ../data_platform/airflow/dags:/opt/airflow/dags:ro
+    - ../data_platform/dbt:/opt/airflow/dbt:ro
+
 services:
 
   # ═══════════════════════ EDGE (profile: edge) ═══════════════════════
-  # Mô phỏng store-001. Nhân bản block này (store-002, store-003...) khi cần nhiều cửa hàng.
+  # Mô phỏng store-001. store-002, store-003 ở profile `edge-multi` bên dưới.
 
   edge-db-store-001:
     <<: *postgres-common
@@ -76,7 +116,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-001:5432/edge_store_001
       REDIS_URL: redis://edge-cache-store-001:6379/0
       CENTRAL_API_URL: http://central-api:8000
+      # Khóa băm SĐT — PHẢI giống nhau ở mọi cửa hàng và trung tâm (shared/pii.py).
+      PII_HASH_KEY: ${PII_HASH_KEY:-changeme-dev-pii-hash-key}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: edge-api-store-001
       OTEL_RESOURCE_ATTRIBUTES: store.id=store-001
     ports: ["8001:8000"]
@@ -94,8 +137,126 @@ services:
       STORE_ID: store-001
       DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-001:5432/edge_store_001
       CENTRAL_API_URL: http://central-api:8000
+      # Khóa do trung tâm cấp cho RIÊNG cửa hàng này: `make provision-store STORE_ID=store-001`.
+      # Rỗng → worker thoát ngay với hướng dẫn, thay vì nhận 401 mãi mãi. Nhân bản cửa hàng
+      # thì mỗi cửa hàng một biến khóa riêng — trung tâm từ chối sự kiện mang danh cửa hàng khác.
+      CENTRAL_API_KEY: ${CENTRAL_API_KEY:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: sync-worker-store-001
+
+  # ═══════════════════════ EDGE ×3 (profile: edge-multi) ═══════════════════════
+  # store-002, store-003 — bản sao của store-001 cho cổng A ("t0 3 cửa hàng chạy 2 giờ", docs/06)
+  # và AT-04 nhiều cửa hàng. Profile riêng để `--profile edge` mặc định vẫn là MỘT cửa hàng
+  # (~250 MB mỗi stack). Mỗi cửa hàng một khóa: CENTRAL_API_KEY_STORE_00N (make provision-store).
+
+  edge-db-store-002:
+    <<: *postgres-common
+    profiles: ["edge-multi"]
+    environment:
+      POSTGRES_USER: ${EDGE_DB_USER:-edge_app}
+      POSTGRES_PASSWORD: ${EDGE_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: edge_store_002
+    ports: ["5435:5432"]
+    volumes:
+      - edge_db_store_002:/var/lib/postgresql
+
+  edge-cache-store-002:
+    image: redis:7-alpine
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    ports: ["6381:6379"]
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - edge_cache_store_002:/data
+
+  edge-api-store-002:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-002: { condition: service_healthy }
+    environment:
+      STORE_ID: store-002
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-002:5432/edge_store_002
+      REDIS_URL: redis://edge-cache-store-002:6379/0
+      CENTRAL_API_URL: http://central-api:8000
+      PII_HASH_KEY: ${PII_HASH_KEY:-changeme-dev-pii-hash-key}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SERVICE_NAME: edge-api-store-002
+      OTEL_RESOURCE_ATTRIBUTES: store.id=store-002
+    ports: ["8002:8000"]
+
+  edge-sync-worker-store-002:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["python", "-m", "edge.sync.worker"]
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-002: { condition: service_healthy }
+    environment:
+      STORE_ID: store-002
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-002:5432/edge_store_002
+      CENTRAL_API_URL: http://central-api:8000
+      CENTRAL_API_KEY: ${CENTRAL_API_KEY_STORE_002:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SERVICE_NAME: sync-worker-store-002
+
+  edge-db-store-003:
+    <<: *postgres-common
+    profiles: ["edge-multi"]
+    environment:
+      POSTGRES_USER: ${EDGE_DB_USER:-edge_app}
+      POSTGRES_PASSWORD: ${EDGE_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: edge_store_003
+    ports: ["5436:5432"]
+    volumes:
+      - edge_db_store_003:/var/lib/postgresql
+
+  edge-cache-store-003:
+    image: redis:7-alpine
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    ports: ["6382:6379"]
+    command: ["redis-server", "--save", "60", "1", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - edge_cache_store_003:/data
+
+  edge-api-store-003:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-003: { condition: service_healthy }
+    environment:
+      STORE_ID: store-003
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-003:5432/edge_store_003
+      REDIS_URL: redis://edge-cache-store-003:6379/0
+      CENTRAL_API_URL: http://central-api:8000
+      PII_HASH_KEY: ${PII_HASH_KEY:-changeme-dev-pii-hash-key}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SERVICE_NAME: edge-api-store-003
+      OTEL_RESOURCE_ATTRIBUTES: store.id=store-003
+    ports: ["8003:8000"]
+
+  edge-sync-worker-store-003:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["python", "-m", "edge.sync.worker"]
+    profiles: ["edge-multi"]
+    restart: unless-stopped
+    depends_on:
+      edge-db-store-003: { condition: service_healthy }
+    environment:
+      STORE_ID: store-003
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-store-003:5432/edge_store_003
+      CENTRAL_API_URL: http://central-api:8000
+      CENTRAL_API_KEY: ${CENTRAL_API_KEY_STORE_003:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SERVICE_NAME: sync-worker-store-003
 
   # ═══════════════════════ CENTRAL (profile: central) ═══════════════════════
 
@@ -120,13 +281,30 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${CENTRAL_DB_USER:-central_app}:${CENTRAL_DB_PASSWORD}@central-db:5432/central
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: central-api
     ports: ["8000:8000"]
+
+  # Job đối soát INV-4 tăng dần theo lịch (ràng buộc #8, DI-1, AT-10). Tới 2026-09-25 nó chỉ chạy
+  # tay — dashboard "sức khỏe luồng" lộ ra điều đó. Chỉ BÁO lệch (bảng `reconciliation_drift`),
+  # không tự sửa: sửa snapshot điểm là sửa tiền của khách.
+  central-reconcile:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["python", "-m", "central.ops.reconcile", "--every", "${RECONCILE_INTERVAL_SECONDS:-3600}"]
+    profiles: ["central"]
+    restart: unless-stopped
+    depends_on:
+      central-db: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${CENTRAL_DB_USER:-central_app}:${CENTRAL_DB_PASSWORD}@central-db:5432/central
 
   # ═══════════════════════ DATA PLATFORM (profile: data) ═══════════════════════
 
   minio:
-    image: minio/minio:latest
+    # Docker Hub `minio/minio` KHÔNG còn tồn tại (pull trả "repository does not exist",
+    # 2026-09-24) — MinIO chỉ còn phát hành image qua quay.io. Ghim bản cụ thể: `latest` của một
+    # nguồn phát hành vừa đổi chính sách là thứ không nên tin (docs/adr/005 §Rủi ro nguồn cung).
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     profiles: ["data"]
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -155,7 +333,16 @@ services:
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
 
-  # Airflow 3 — LocalExecutor (ADR-007): KHÔNG dùng Celery worker/Redis riêng
+  # Airflow 3 — LocalExecutor (ADR-007): KHÔNG dùng Celery worker/Redis riêng.
+  #
+  # Airflow 3 khác Airflow 2 ở ba chỗ làm compose cũ chết (sửa 2026-09-24):
+  #   - `airflow webserver` đã bị BỎ → `airflow api-server` (UI + REST + Execution API).
+  #   - `dag-processor` là tiến trình RIÊNG, bắt buộc — thiếu nó thì không DAG nào được đọc.
+  #   - Task không còn nói chuyện thẳng với DB metadata mà qua Execution API của api-server,
+  #     xác thực bằng JWT: mọi thành phần phải dùng CHUNG `jwt_secret` (không đặt thì mỗi tiến
+  #     trình tự sinh một khóa, và task chết với "Signature verification failed") và trỏ
+  #     `execution_api_server_url` về api-server.
+  # Không có triggerer: chưa dùng deferrable operator nào — bớt một tiến trình (~300 MB, spike S1).
   airflow-db:
     <<: *postgres-common
     profiles: ["data"]
@@ -167,39 +354,38 @@ services:
       - airflow_db:/var/lib/postgresql
 
   airflow-init:
-    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
-    profiles: ["data"]
+    <<: *airflow-common
+    restart: "no"
     depends_on:
       airflow-db: { condition: service_healthy }
-    environment: &airflow-env
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD}@airflow-db:5432/airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW_UID: "50000"
     command: ["airflow", "db", "migrate"]
 
-  airflow-webserver:
-    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
-    profiles: ["data"]
-    restart: unless-stopped
+  airflow-api-server:
+    <<: *airflow-common
     depends_on:
       airflow-init: { condition: service_completed_successfully }
-    environment: *airflow-env
-    ports: ["8081:8080"]
-    volumes:
-      - ../data_platform/airflow/dags:/opt/airflow/dags:ro
-    command: ["airflow", "webserver"]
+    # Chỉ nghe trên máy này: SimpleAuthManager ở chế độ "ai cũng là admin" (dev, không login).
+    ports: ["127.0.0.1:8081:8080"]
+    command: ["airflow", "api-server"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-s", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   airflow-scheduler:
-    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
-    profiles: ["data"]
-    restart: unless-stopped
+    <<: *airflow-common
     depends_on:
       airflow-init: { condition: service_completed_successfully }
-    environment: *airflow-env
-    volumes:
-      - ../data_platform/airflow/dags:/opt/airflow/dags:ro
+      airflow-api-server: { condition: service_healthy }
     command: ["airflow", "scheduler"]
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    depends_on:
+      airflow-init: { condition: service_completed_successfully }
+    command: ["airflow", "dag-processor"]
 
   # ═══════════════════════ BI (profile: bi) ═══════════════════════
 
@@ -217,19 +403,50 @@ services:
   # ADR-009 — 1 container thay vì SigNoz (4-8GB). Chỉ bật khi cần săn bottleneck.
 
   otel-lgtm:
-    image: grafana/otel-lgtm:latest
+    # Ghim bản (0.33.0 = Grafana 13.2.1, Prometheus nhận OTLP): `latest` đổi cấu hình bên trong
+    # (đường dẫn provisioning, cách dịch tên metric) mà không báo — dashboard và test tên metric
+    # dựa đúng vào những thứ đó (shared/metrics.py, kiểm trên bản này 2026-09-25).
+    image: grafana/otel-lgtm:0.33.0
     profiles: ["observability"]
     restart: unless-stopped
     ports:
       - "3001:3000"   # Grafana UI (đổi cổng để không đụng Metabase :3000)
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
+    volumes:
+      # Prometheus/Tempo/Loki ghi ở /data: không có volume thì mỗi lần container khởi động lại
+      # là mất sạch lịch sử — test ngâm 72h (docs/08 §6.2) cần đúng cái lịch sử đó.
+      - otel_lgtm_data:/data
+      # Dashboard "sức khỏe luồng" (docs/17 §6) — file trong repo, provision lúc khởi động.
+      - ./observability/grafana/provisioning/retail-sync.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/retail-sync.yaml:ro
+      - ./observability/grafana/dashboards:/otel-lgtm/retail-sync-dashboards:ro
+
+  # Bộ giám sát luồng (`python -m pipeline monitor`, packages/pipeline/monitor.py): đọc trạng thái
+  # S3–S6 (Postgres trung tâm, lake, ClickHouse) mỗi 30 s, đẩy OTLP cho dashboard. Chỉ ĐỌC.
+  # Image Airflow vì nó đã có đúng `packages/pipeline` + pyarrow + OTel SDK — không thêm image.
+  # Profile `observability`: nó chỉ có ích khi có chỗ nhận metric. Không `depends_on` các nguồn:
+  # nguồn chưa lên thì nó báo `flow_monitor_source_up = 0` rồi đo lại lượt sau.
+  flow-monitor:
+    build: { context: ../, dockerfile: infra/docker/airflow.Dockerfile }
+    image: retail-sync-airflow:3.3.2
+    profiles: ["observability"]
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "pipeline", "monitor"]
+    environment:
+      <<: *pipeline-env
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      FLOW_MONITOR_INTERVAL_SECONDS: ${FLOW_MONITOR_INTERVAL_SECONDS:-30}
 
 volumes:
   edge_db_store_001:
   edge_cache_store_001:
+  edge_db_store_002:
+  edge_cache_store_002:
+  edge_db_store_003:
+  edge_cache_store_003:
   central_db:
   minio_data:
   clickhouse_data:
   airflow_db:
   metabase_data:
+  otel_lgtm_data:

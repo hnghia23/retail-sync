@@ -117,3 +117,27 @@ lineage dbt tương đương `dagster-dbt`, bù lại lợi thế lớn nhất c
 
 Quay lại Dagster nếu: RAM trở thành nút thắt thật dù đã tách profile, hoặc mô hình asset của
 Airflow 3 tỏ ra vướng víu trong thực tế khi làm tuần 3.
+
+## Hiện thực (2026-09-24)
+
+Quyết định giữ nguyên; ghi lại những gì chỉ biết được khi dựng thật (chi tiết ở
+[progress/2026-09-24-giai-doan-a-dbt-airflow.md](../progress/2026-09-24-giai-doan-a-dbt-airflow.md)):
+
+- **Airflow 3.3.2**, 3 tiến trình: `api-server` (thay `webserver` đã bị bỏ), `scheduler`,
+  `dag-processor` (bắt buộc ở Airflow 3). Không `triggerer` vì chưa có deferrable operator. Mọi
+  thành phần phải dùng CHUNG `jwt_secret` + `execution_api_server_url`, thiếu thì mọi task chết
+  với "Signature verification failed".
+- **RAM đo thật:** api-server ~310 MB, dag-processor ~250 MB, scheduler 1,2 GB lúc nghỉ / 2,1 GB
+  khi các task dbt chạy song song. Cả stack 3 cửa hàng + trung tâm + data platform: ~3,4 GiB, đỉnh
+  3,9 GiB. Điều kiện "RAM thành nút thắt" ở dưới **chưa chạm**.
+- Cosmos 1.15 cần 3 cấu hình, nếu không sẽ lặng lẽ sai: `InvocationMode.SUBPROCESS` (dbt ở venv
+  riêng), `source_rendering_behavior` (không thì test trên source bị bỏ),
+  `should_detach_multiple_parents_tests` (không thì test fact → dim chạy trước khi dim dựng xong).
+- Bảng bài học v1 ở trên: dòng "Airflow Connections cho từng cửa hàng" **không còn áp dụng**. Pipeline
+  chỉ đọc Postgres TRUNG TÂM (không bao giờ đọc cửa hàng, [17 §2](../17-data-flow.md)), cấu hình qua
+  biến môi trường cùng tên với CLI `python -m pipeline`. DAG không chứa logic: `catchup=False` vì
+  lake là trạng thái, `max_active_runs=1` + advisory lock chống hai lượt chồng nhau.
+- Mô hình asset của Airflow 3 chưa dùng; DAG theo lịch (`PIPELINE_SCHEDULE`) là đủ ở giai đoạn A.
+
+*Changelog: 2026-09-24 — thêm mục "Hiện thực".*
+

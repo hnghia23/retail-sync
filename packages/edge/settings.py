@@ -6,7 +6,14 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from shared.config import JwtSettings, OtelSettings, PricingRules, ReturnRules, SyncSettings
+from shared.config import (
+    JwtSettings,
+    OtelSettings,
+    PiiSettings,
+    PricingRules,
+    ReturnRules,
+    SyncSettings,
+)
 
 
 class EdgeSettings(BaseSettings):
@@ -18,6 +25,9 @@ class EdgeSettings(BaseSettings):
     database_url: str = "postgresql+asyncpg://edge_app:changeme-edge@localhost:5433/edge_store_001"
     redis_url: str = "redis://localhost:6380/0"
     central_api_url: str = "http://localhost:8000"
+    # Khóa của CỬA HÀNG NÀY do trung tâm cấp (`central.ops.provision_store`). Rỗng = chưa
+    # đăng ký: sync worker từ chối khởi động thay vì nhận `401` mãi mãi (docs/13 §2).
+    central_api_key: str = ""
 
     # docs/13 §4 — ngân sách tra cứu khách ở client. Vượt thì coi như khách ẩn danh,
     # KHÔNG chặn bán hàng (nguyên tắc kiến trúc #1).
@@ -26,6 +36,15 @@ class EdgeSettings(BaseSettings):
 
     # Cảnh báo master data cũ — B02 E03
     master_data_stale_after_hours: int = 24
+
+    # Múi giờ của cửa hàng, dạng độ lệch so với UTC (phút). Việt Nam không có giờ mùa hè
+    # nên một độ lệch cố định là đủ, và không phụ thuộc gói `tzdata` (Windows không có sẵn).
+    # Dùng để kiểm `business_date` lúc mở ca — không dùng để SUY RA nó (G5).
+    store_utc_offset_minutes: int = 420
+
+    # Chu kỳ đọc outbox cho metric S2 (`edge.health.OutboxGauges`). Hai câu lệnh trên partial
+    # index mỗi lần — rẻ, nhưng không cần dày hơn chu kỳ đẩy metric (15 s trong compose).
+    outbox_metrics_interval_seconds: float = 15.0
 
     debug: bool = False
 
@@ -58,3 +77,8 @@ def get_sync_settings() -> SyncSettings:
 @lru_cache
 def get_otel_settings() -> OtelSettings:
     return OtelSettings()
+
+
+@lru_cache
+def get_pii_settings() -> PiiSettings:
+    return PiiSettings()

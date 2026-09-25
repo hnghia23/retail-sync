@@ -1,7 +1,14 @@
 # retail-sync — Tài liệu thiết kế
 
-> **Trạng thái:** Thiết kế hoàn tất. Đang viết code v2 trong `packages/`.
-> **Cập nhật:** 2026-09-17
+> **Trạng thái:** Thiết kế hoàn tất. Code v2 trong `packages/`. **🚪 Cổng A (luồng dữ liệu
+> thông suốt) đạt 2026-09-24** — đang sang **giai đoạn B** (chứng minh ổn định & scale).
+> **Cập nhật:** 2026-09-25
+>
+> 🔀 **Hướng phát triển hiện tại — [ADR-010](adr/010-data-flow-first.md):** chỉ tập trung vào
+> **luồng dữ liệu**, không dựng tiếp ứng dụng để dùng. Dữ liệu vào bằng **bộ giả lập**, không
+> qua UI. Thứ tự: **A** luồng dữ liệu thông suốt → **B** chứng minh ổn định & scale → **C** tính
+> năng. Người mới đọc [17-data-flow](17-data-flow.md) và [18-simulator](18-simulator.md) ngay
+> sau 00–03.
 
 Đây là bộ tài liệu thiết kế cho bản **làm lại từ đầu** của retail-sync. Source v2 nằm ở
 `packages/`. Code trong `store/`, `central/` là **prototype v1 — chỉ dùng để tham khảo**,
@@ -18,7 +25,7 @@ tại sao lại làm lại.
 | 03 | [03-architecture.md](03-architecture.md) | Kiến trúc nào? Ranh giới ở đâu? |
 | 04 | [04-tech-stack.md](04-tech-stack.md) | Dùng công nghệ gì, vì sao, và bỏ gì? |
 | 05 | [05-data-model.md](05-data-model.md) | Dữ liệu trông như thế nào? |
-| 06 | [06-roadmap.md](06-roadmap.md) | Làm gì trong 4 tuần? |
+| 06 | [06-roadmap.md](06-roadmap.md) | Làm gì, theo thứ tự nào? *(giai đoạn A → B → C)* |
 | **07** | **[07-stack-decision.md](07-stack-decision.md)** | **✅ Bảng chốt stack — lý do từng lựa chọn** |
 | **08** | **[08-reliability-and-scale.md](08-reliability-and-scale.md)** | **Chế độ hỏng, backpressure, observability, kế hoạch chứng minh ổn định & scale** |
 | 09 | [09-v1-postmortem.md](09-v1-postmortem.md) | Prototype cũ sai ở đâu? |
@@ -29,6 +36,8 @@ tại sao lại làm lại.
 | 14 | [14-sequence-flows.md](14-sequence-flows.md) | 4 luồng còn thiếu: trả hàng, kéo master data, chốt ca, đồng bộ lỗi |
 | 15 | [15-glossary.md](15-glossary.md) | Thuật ngữ dùng thống nhất |
 | 16 | [16-test-plan.md](16-test-plan.md) | Bản đồ AT/CH/LD/DI → file test cụ thể |
+| **17** | **[17-data-flow.md](17-data-flow.md)** | **⭐ Luồng dữ liệu đầu-cuối: 6 chặng, 5 bẫy phải xử lý, đối soát xuyên tầng, "ổn định" đo thế nào** |
+| **18** | **[18-simulator.md](18-simulator.md)** | **⭐ Bộ giả lập: 3 chế độ, mô hình sinh dữ liệu, manifest đáp án** |
 | — | [diagrams/system-overview.html](diagrams/system-overview.html) | Sơ đồ trực quan: kiến trúc + tech stack + 8 chú thích ADR — mở bằng trình duyệt |
 | 99 | [99-original-spec.md](99-original-spec.md) | Spec gốc nguyên văn (tham chiếu) |
 
@@ -60,6 +69,7 @@ khi muốn đảo ngược một quyết định.
 | [007](adr/007-airflow-over-dagster.md) | **Airflow 3 + LocalExecutor** (quyết định của chủ dự án) |
 | [008](adr/008-remaining-decisions.md) | **Chốt các quyết định còn lại** — DB cửa hàng, UI, dbt, redeem, multi-tenant |
 | [009](adr/009-observability-stack.md) | **OpenTelemetry + `grafana/otel-lgtm`** để săn bottleneck |
+| [010](adr/010-data-flow-first.md) | **Luồng dữ liệu trước, tính năng sau** — bộ giả lập thay UI, giai đoạn A/B/C |
 
 > **✅ Stack đã chốt (2026-09-11)** — [07-stack-decision.md](07-stack-decision.md).
 >
@@ -77,7 +87,20 @@ khi muốn đảo ngược một quyết định.
 > — đã chạy trên PostgreSQL 18.6 và có test bất biến, hàm tự tạo partition `point_ledger`,
 > Dockerfile, CI. Xem [11-design-readiness.md §6](11-design-readiness.md).
 >
-> **Việc tiếp theo:** domain thuần (tính tiền, tính điểm, xếp hạng) rồi use case `PlaceSale`.
+> ✅ **Tuần 1 đóng cổng (2026-09-18); đồng bộ cửa hàng → trung tâm chạy thật (2026-09-23).**
+>
+> ✅ **Giai đoạn A xong, cổng A đạt (2026-09-24)** — luồng S1 → S6 chạy hết trên compose: cửa
+> hàng → outbox → trung tâm → lake (Parquet/MinIO) → bronze (ClickHouse) → dbt → mart, lên lịch
+> bằng Airflow 3. Bộ giả lập (`edge` 3 cửa hàng thật, `virtual` 20 cửa hàng ảo có tật) + bộ đối
+> soát 5 tầng L0…L4 `CONVERGED`; `tests/scenarios/` AT-01…04, 07, 10. Nhật ký:
+> [progress/2026-09-24-cong-a.md](progress/2026-09-24-cong-a.md) và các file cùng ngày.
+>
+> ✅ **Giai đoạn B, việc 1: dashboard "sức khỏe luồng"** (2026-09-25) — metric OTel theo chặng
+> S1 → S6, bộ giám sát `pipeline monitor`, audit báo độ tươi, Grafana `http://localhost:3001`
+> ([17 §6](17-data-flow.md), [progress](progress/2026-09-25-giai-doan-b-dashboard.md)).
+>
+> **Việc tiếp theo — giai đoạn B** ([06](06-roadmap.md)): job CI cho `tests/scenarios/` → test
+> hỗn loạn CH-1…7 → test tải LD-1…4 (bộ giả lập `virtual`, `bulk`) → test ngâm 72h.
 
 ## Nguyên tắc xuyên suốt
 

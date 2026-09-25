@@ -61,7 +61,7 @@ cho mỗi quyết định lớn.
 | D2 | **Thiếu `store_id`** trong bảng `transactions` | POS không biết mình là cửa hàng nào → DAG buộc hardcode `store_key = 1` → mọi phân tích theo cửa hàng sụp đổ | `store_id` bắt buộc trong mọi bảng giao dịch — [05](05-data-model.md) §1 |
 | D3 | `transaction_id` là `INT AUTO_INCREMENT` | Cửa hàng 1 và 2 đều sinh `1,2,3...` → **đụng ID khi gộp về trung tâm** | UUIDv7 sinh tại cửa hàng |
 | D4 | **Publish Kafka sau `commit()`** ngoài transaction | Dual-write: app chết giữa hai bước → event mất vĩnh viễn | Transactional outbox — [ADR-003](adr/003-outbox-not-kafka.md) |
-| D5 | **Không có đường trung tâm → cửa hàng** | Luồng quan trọng nhất của spec ("khách lần đầu → gọi trung tâm") chưa từng tồn tại | Nằm trong cổng tuần 2, kịch bản AT-05 |
+| D5 | **Không có đường trung tâm → cửa hàng** | Luồng quan trọng nhất của spec ("khách lần đầu → gọi trung tâm") chưa từng tồn tại | Kịch bản AT-05 — dời sang **giai đoạn C** theo [ADR-010](adr/010-data-flow-first.md) (2026-09-23) |
 | D6 | Điểm (`earned_point`) do **client tự khai** | Client gửi bao nhiêu điểm cũng được | Server tính từ `total`, quy tắc lấy từ `earn_rule` |
 | D7 | Không có idempotency ở bất kỳ đâu | Gửi lại = cộng điểm hai lần | `event_id` là khóa chính, `ON CONFLICT DO NOTHING` |
 | D8 | Xếp hạng theo số dư (dự kiến) | Khách tiêu điểm sẽ **bị tụt hạng** | Xếp hạng theo `lifetime_earned` — [05](05-data-model.md) §4 |
@@ -154,4 +154,6 @@ gì đã thử.
    rò rỉ, secret bị hardcode — cả ba đều bắt được bằng CI, không bắt được bằng ý chí.
 
 ---
+*Changelog: 2026-09-25 — D5: AT-05 dời sang giai đoạn C (ADR-010).*
+
 *Changelog: 2026-09-11 — tạo mới dựa trên rà soát toàn bộ code v1.*

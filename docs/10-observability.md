@@ -94,6 +94,12 @@ Airflow DAG
 `astronomer-cosmos` cho mỗi dbt model một task riêng → thấy ngay model nào là nút thắt, thay
 vì một khối `dbt build` mờ đục.
 
+**Chỉ số theo từng chặng của luồng** (S1…S6), độ tươi đầu-cuối và chênh đối soát xuyên tầng
+được định nghĩa ở [17-data-flow §6](17-data-flow.md). Đó là nội dung của dashboard "sức khỏe
+luồng", thứ phải có **trước** cổng A ([ADR-010](adr/010-data-flow-first.md)). Bộ giả lập cũng gửi
+trace/metric với `service.name=simulator`, nên độ trễ phía client và phía server nằm trên cùng
+một dashboard.
+
 ---
 
 ## 3. Instrumentation — làm gì cụ thể
@@ -235,6 +241,7 @@ Bốn cái, không hơn — dashboard không ai nhìn là nợ, không phải t�
 
 | # | Dashboard | Nội dung |
 |---|---|---|
+| **D0** | **Sức khỏe luồng dữ liệu** ✅ 2026-09-25 | Chỉ số S1 → S6 của [17 §6](17-data-flow.md), độ tươi L2/L4, chênh đối soát, lệch INV-4. Provision từ `infra/observability/grafana/dashboards/flow-health.json` — **dashboard là file trong repo**, không phải trạng thái trong volume Grafana |
 | D1 | **Sức khỏe cửa hàng** | p95/p99 chốt đơn · cache hit rate · độ sâu outbox · **tuổi sự kiện chưa gửi cũ nhất** · trạng thái circuit breaker |
 | D2 | **Đồng bộ** | Độ trễ theo cửa hàng · tỷ lệ thành công · tỷ lệ trùng lặp · cửa hàng lâu không thấy |
 | D3 | **Phân rã trace** | Thời gian chốt đơn tách theo giai đoạn — *đây là dashboard săn bottleneck chính* |
@@ -254,11 +261,42 @@ Bốn cái, không hơn — dashboard không ai nhìn là nợ, không phải t�
 
 | Khi nào | Việc |
 |---|---|
-| **Ngày 0 (spike)** | Thêm S5: `grafana/otel-lgtm` lên, xác nhận trace từ FastAPI tới được Tempo |
-| **Tuần 1** | Auto-instrumentation từ đầu — rẻ hơn nhiều so với gắn thêm sau |
-| **Tuần 2** | Truyền trace context qua outbox (§4) — làm cùng lúc viết outbox |
-| **Tuần 3** | `astronomer-cosmos` đã cho span mỗi dbt model; bật ClickHouse `query_log` |
-| **Tuần 4** | Dashboard D1–D4 · đo overhead · dùng để phân tích kết quả LD-1…LD-4 |
+| **Ngày 0 (spike)** | ✅ Thêm S5: `grafana/otel-lgtm` lên, xác nhận trace từ FastAPI tới được Tempo |
+| **Tuần 1** | ✅ Auto-instrumentation từ đầu — rẻ hơn nhiều so với gắn thêm sau |
+| **Tuần 2** | ✅ Truyền trace context qua outbox (§4), span link ở `sync.push_batch` |
+| **Giai đoạn A** *(thay tuần 3, ADR-010)* | ✅ `astronomer-cosmos`: mỗi dbt model là một task (thời lượng từng model thấy trên Airflow UI). ⏳ Span OTel từ Airflow chưa bật. ⏳ **Dashboard "sức khỏe luồng"** ([17 §6](17-data-flow.md)) **chưa làm** — dời lên đầu giai đoạn B (không thuộc điều kiện cổng A) |
+| **Giai đoạn B** *(thay tuần 4)* | ✅ Dashboard "sức khỏe luồng" + metric OTel (2026-09-25, §9) · D1–D4 · đo overhead · săn đuôi p99 1,65 s của `POST /events` ở bộ giả lập `virtual` 20 cửa hàng · phân tích LD-1…LD-4 |
 
 ---
+
+## 9. Metric — những điều chỉ biết được khi kiểm trên `otel-lgtm` thật *(2026-09-25)*
+
+Metric đi cùng đường với trace: SDK OTel → OTLP → collector trong `grafana/otel-lgtm` →
+Prometheus. `shared.metrics.setup_metrics()` dựng `MeterProvider` cho edge-api, sync worker,
+central-api; bộ giám sát luồng và bộ đối soát tự dựng (chúng không import `shared`). Bốn điều
+kiểm bằng thực nghiệm trên đúng image của compose (ghim `grafana/otel-lgtm:0.33.0`):
+
+| Điều | Hệ quả |
+|---|---|
+| Thuộc tính **resource** (`store.id` trong `OTEL_RESOURCE_ATTRIBUTES`) **không thành label**, chỉ nằm ở `target_info` | Metric nào cần tách theo cửa hàng mang `store_id` làm ATTRIBUTE từng điểm đo. Metric HTTP tự động thì tách theo `job` (= `service.name`, ví dụ `edge-api-store-001`) |
+| Histogram mặc định có bucket 0…10000 (hợp cho mili-giây) | Không tự tạo histogram theo giây. Độ trễ lấy từ instrumentation FastAPI với **semconv HTTP ổn định** (`OTEL_SEMCONV_STABILITY_OPT_IN=http`, đặt trong `setup_metrics()`): `http.server.request.duration` theo giây, bucket 5 ms…10 s, label `http.route`. Semconv cũ ghi mili-giây, label `http.target` |
+| Tên đổi khi vào Prometheus: đơn vị `s` → `_seconds`, counter → `_total`, đơn vị `{…}` không thêm gì | Đặt tên instrument sao cho tên Prometheus đúng tên ở [08 §5](08-reliability-and-scale.md). Test `tests/unit/test_flow_dashboard.py` dựng danh mục tên từ chính code phát và đỏ khi dashboard dùng tên không ai phát |
+| Prometheus/Tempo/Loki ghi ở `/data` trong container | Named volume `otel_lgtm_data`: không có nó thì khởi động lại container là mất lịch sử — test ngâm 72h cần đúng lịch sử đó |
+
+Chu kỳ đẩy: `OTEL_METRIC_EXPORT_INTERVAL=15000` (15 s) cho mọi tiến trình app trong compose; bộ
+giám sát đo mỗi 30 s (`FLOW_MONITOR_INTERVAL_SECONDS`).
+
+**Thông tin đăng nhập không bao giờ đi trong URL.** httpx ghi URL của mỗi request vào log ở mức
+INFO. Client ClickHouse của pipeline và bộ đối soát từng gửi `?password=…`, và bộ giám sát (log
+INFO, 30 giây một lần) in mật khẩu ra `docker logs` ngay lần chạy đầu. Giờ mật khẩu đi bằng
+header `X-ClickHouse-User`/`X-ClickHouse-Key` (test `test_clickhouse_credentials.py`).
+
+---
+*Changelog: 2026-09-25 (lần 2) — §9 metric + dashboard D0 "sức khỏe luồng".*
+
+*Changelog: 2026-09-25 — đánh dấu trạng thái lộ trình; dashboard sức khỏe luồng dời sang B;
+thêm tín hiệu tải cần săn.*
+
+*Changelog: 2026-09-23 — trỏ chỉ số theo chặng về docs/17 §6.*
+
 *Changelog: 2026-09-11 — tạo mới theo yêu cầu bổ sung stack giám sát.*

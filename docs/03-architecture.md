@@ -19,11 +19,13 @@ Năm nguyên tắc, theo thứ tự ưu tiên. Khi hai nguyên tắc mâu thuẫ
 ```mermaid
 flowchart TB
     subgraph EDGE["🏬 CỬA HÀNG (nhân bản N lần)"]
-        UI["POS UI + Báo cáo ca<br/>(HTMX + Alpine.js)"]
+        SIM["Bộ giả lập<br/>(nguồn dữ liệu giai đoạn A/B)"]
+        UI["POS UI<br/>(HTMX + Alpine.js — đóng băng tới giai đoạn C)"]
         API["Edge API — FastAPI<br/>modular monolith<br/>┃ pos ┃ loyalty ┃ reporting ┃"]
         PG_E[("PostgreSQL<br/>đơn hàng · khách cục bộ<br/>ledger cục bộ · outbox")]
         RD[("Redis<br/>cache khách<br/>phiên đăng nhập")]
         SW["Sync Worker<br/>(tiến trình riêng)"]
+        SIM -->|"HTTP — cùng use case với UI"| API
         UI --> API
         API --> PG_E
         API -.cache-aside.-> RD
@@ -38,7 +40,7 @@ flowchart TB
 
     subgraph DATA["📊 NỀN TẢNG DỮ LIỆU (lớp C, T+1)"]
         DG["Airflow 3<br/>LocalExecutor"]
-        LAKE[("MinIO<br/>bronze · silver<br/>Parquet phân vùng")]
+        LAKE[("MinIO<br/>bronze Parquet bất biến<br/>(silver = staging dbt trong CH)")]
         CH[("ClickHouse<br/>star schema")]
         DBT["dbt-core<br/>biến đổi + test"]
         BI["Metabase"]
@@ -54,8 +56,7 @@ flowchart TB
     CAPI -->|"master data có phiên bản<br/>(cửa hàng chủ động kéo)"| SW
     API -.->|"tra khách khi cache miss<br/>timeout 500ms, lỗi thì bỏ qua"| CAPI
 
-    PG_E -.->|"trích xuất tăng dần"| DG
-    PG_C -.->|"trích xuất tăng dần"| DG
+    PG_C -.->|"trích xuất tăng dần<br/>(chỉ từ trung tâm, theo recorded_at)"| DG
 
     style EDGE fill:#e8f4f8,stroke:#2c5f7c
     style CENTRAL fill:#f0e8f8,stroke:#5f2c7c
@@ -102,7 +103,9 @@ bây giờ, sau này tách sẽ rất đau. Xem [ADR-004](adr/004-modular-monoli
 
 Hệ thống vận hành (OLTP) không bao giờ bị truy vấn phân tích chạm vào.
 
-- Trích xuất tăng dần từ replica hoặc bằng truy vấn nhẹ có watermark
+- Trích xuất tăng dần **chỉ từ Postgres trung tâm**, watermark `recorded_at` có độ trễ an
+  toàn ([17 §4](17-data-flow.md) bẫy 1). Không bao giờ đọc Postgres cửa hàng: nó nằm sau NAT,
+  và `recorded_at` chỉ có ở trung tâm
 - Lake là bản sao bất biến — warehouse luôn dựng lại được từ đây
 - Dashboard chỉ đọc ClickHouse, không bao giờ đọc Postgres
 
@@ -180,7 +183,7 @@ sequenceDiagram
         W->>P: UPDATE outbox SET sent_at = now()
     end
 
-    Note over W,X: Lỗi → backoff lũy thừa + jitter<br/>Quá N lần → chuyển dead-letter + cảnh báo
+    Note over W,X: Nhánh lỗi: xem 14 §4 — lỗi đường truyền KHÔNG tính lượt thử;<br/>chỉ sự kiện bị trung tâm từ chối mới đếm tới dead-letter
 ```
 
 `FOR UPDATE SKIP LOCKED` cho phép chạy nhiều worker song song mà không giẫm chân nhau —
@@ -221,7 +224,7 @@ số dư hiển thị = số dư từ trung tâm + SUM(ledger cục bộ chưa g
 | Sync worker chết | Outbox dồn, không mất gì | ✅ Khi khởi động lại |
 | ClickHouse chết | Dashboard không dùng được. Vận hành không bị ảnh hưởng | ✅ Có |
 | MinIO chết | Pipeline dừng. Vận hành không bị ảnh hưởng | ✅ Có |
-| Dagster chết | Warehouse ngừng cập nhật. Vận hành không bị ảnh hưởng | ✅ Có |
+| Airflow chết | Warehouse ngừng cập nhật. Vận hành không bị ảnh hưởng | ✅ Có |
 
 **Chỉ có một điểm lỗi đơn làm dừng việc bán hàng: Postgres của chính cửa hàng đó.** Đó là
 đúng đắn — nó đã cục bộ, và bán kính ảnh hưởng chỉ là một cửa hàng.
@@ -243,27 +246,31 @@ pipeline T+1 về mặt định nghĩa không phục vụ được. Và chốt c
 ## 6. Nền tảng dữ liệu
 
 ```
-Postgres cửa hàng ─┐
-                   ├─► BRONZE (Parquet thô, bất biến)
-Postgres trung tâm ┘    s3://lake/bronze/<nguồn>/<bảng>/dt=YYYY-MM-DD/store=<id>/*.parquet
-                             │
+Postgres trung tâm ──► BRONZE (Parquet thô, bất biến)
+                        s3://lake/bronze/central/<bảng>/dt=<ngày nạp>/<start>_<end>.parquet
+                             │  s3() + insert_deduplication_token
                              ▼
-                        SILVER (đã làm sạch, chuẩn hóa, khử trùng lặp)
-                        s3://lake/silver/...
+                        ClickHouse bronze_* ──► dbt staging (= SILVER: làm sạch, khử trùng)
                              │
                              ▼
                         ClickHouse — GOLD (star schema)
-                        dim_date · dim_store · dim_employee
-                        dim_product · dim_customer (SCD2)
-                        fact_sale_line · fact_point_event
+                        dim_date · dim_store · dim_employee · dim_shift
+                        dim_product · dim_customer (SCD1 ở giai đoạn A; SCD2 là C)
+                        fact_sale_line · fact_payment (riêng, ràng buộc #5) · fact_point_event
                              │
                              ▼
-                        Metabase
+                        Metabase (giai đoạn C)
 ```
 
+Hiện thực (2026-09-24): S4 + S5 ở [`packages/pipeline/`](../packages/pipeline/), S6 ở
+[`data_platform/dbt/`](../data_platform/dbt/), nối bằng DAG `retail_pipeline` (Airflow 3 +
+cosmos). Chi tiết từng chặng và 5 bẫy: [17](17-data-flow.md).
+
 Nguyên tắc:
-- **Bronze bất biến.** Không bao giờ sửa. Xóa warehouse thì dựng lại được toàn bộ từ đây.
-- **Mọi bước idempotent.** Ghi theo phân vùng, ghi đè trọn phân vùng thay vì chèn thêm.
+- **Bronze bất biến.** Không bao giờ sửa. Xóa warehouse thì dựng lại được toàn bộ từ đây
+  (đã làm thật: `DROP DATABASE` → một lượt DAG → số khớp tuyệt đối).
+- **Mọi bước idempotent.** Bronze: `insert_deduplication_token` = đường dẫn + SHA-256. Mart:
+  thay trọn phân vùng tháng bị ảnh hưởng (`insert_overwrite`), không chèn thêm.
 - **Biến đổi nằm trong dbt**, không nằm trong Python. Có test, có lineage, có docs miễn phí.
 - **Fact ở mức dòng sản phẩm** (`fact_sale_line`), không phải mức đơn — chi tiết nhất có
   thể, gộp lên sau bằng SQL.
@@ -280,4 +287,13 @@ Nguyên tắc:
 | Multi-region | Một quốc gia | Khi mở rộng quốc tế |
 
 ---
+*Changelog: 2026-09-25 — §2 sơ đồ: silver không nằm trên MinIO; §6 theo hiện thực (dim_shift,
+fact_payment, SCD1, vị trí code, cách idempotent của bronze và mart).*
+
+*Changelog: 2026-09-23 — theo [ADR-010](adr/010-data-flow-first.md) và [17](17-data-flow.md):
+thêm bộ giả lập vào sơ đồ; **bỏ mũi tên trích xuất từ Postgres cửa hàng** (mâu thuẫn với NAT
+ở 14 §2 và với việc bronze phân vùng theo `recorded_at`, cột chỉ có ở trung tâm); §4.2 trỏ về
+nhánh lỗi đã đính chính ở 14 §4; §5 Dagster → Airflow (sót từ ADR-007); §6 bố cục bronze mới,
+silver là staging dbt.*
+
 *Changelog: 2026-09-11 — tạo mới.*

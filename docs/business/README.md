@@ -1,5 +1,12 @@
 # Business Requirements & Vận hành thực tế
 
+> **Trạng thái (2026-09-25):** đây là **bản phân tích tại thời điểm 2026-09-11**, giữ nguyên để
+> truy được vì sao thiết kế đổi. Các "lỗ hổng" nó chỉ ra đã được hấp thụ vào thiết kế và code:
+> thực thể `shift` + mở/đóng ca, `business_date`, `tendered_amount`/`change_amount`,
+> `authorized_by_employee_id`, `promotion_id`, lớp truy vấn A/B/C ([03 §5](../03-architecture.md)).
+> Lớp truy vấn A (báo cáo tại quầy) là tính năng giai đoạn C theo
+> [ADR-010](../adr/010-data-flow-first.md). Tiến độ thật ở [docs/progress/](../progress/).
+
 Bộ tài liệu này trả lời một câu hỏi mà phần thiết kế kỹ thuật không trả lời được:
 
 > **Hệ thống này thực sự được dùng như thế nào, bởi ai, bao nhiêu lần một ngày?**
@@ -32,6 +39,12 @@ Có **ba lớp** truy vấn khác nhau về bản chất, không phải một:
 
 Toàn bộ tuần 3 của lộ trình phục vụ lớp **ít dùng nhất**, trong khi lớp **dùng nhiều nhất**
 chưa được thiết kế. Lớp A không thể đi qua warehouse T+1 — quản lý cần số của *hôm nay*.
+
+> 🔀 **Cập nhật 2026-09-23 — [ADR-010](../adr/010-data-flow-first.md).** Phát hiện ở trên vẫn
+> đúng: lớp A là lớp dùng nhiều nhất và phải đọc thẳng Postgres cửa hàng. Nhưng chủ dự án đã
+> chọn **làm luồng dữ liệu và bằng chứng ổn định trước**, nên báo cáo lớp A dời sang giai đoạn C.
+> Dời được mà không tốn gì về sau: lớp A chỉ là truy vấn **đọc** trên các bảng và index đã có
+> sẵn ở Postgres cửa hàng ([05 §3.6](../05-data-model.md)). Không đổi schema, không đổi luồng.
 
 ### 2. 🟡 ClickHouse không cần thiết ở quy mô POC — trực giác của bạn đúng
 

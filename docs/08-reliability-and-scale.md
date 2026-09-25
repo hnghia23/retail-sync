@@ -5,6 +5,18 @@
 >
 > Doc này biến ưu tiên đó thành yêu cầu kỹ thuật cụ thể và **kế hoạch chứng minh**, thay vì
 > chỉ tuyên bố.
+>
+> 🔀 **Từ 2026-09-23 ([ADR-010](adr/010-data-flow-first.md))**, kế hoạch chứng minh ở §6 là
+> toàn bộ **giai đoạn B**, và chạy ngay sau khi luồng dữ liệu (giai đoạn A) thông suốt, không đợi
+> tính năng. Nguồn tải là **bộ giả lập** ([18](18-simulator.md)). Điều kiện đạt chung của mọi
+> thử nghiệm là `simulator audit` = `CONVERGED` ([17 §5](17-data-flow.md)).
+>
+> ▶️ **Hiện tại (2026-09-25):** cổng A đạt 2026-09-24, nên **§6 là việc đang làm**. Công cụ đã sẵn:
+> bộ giả lập `edge` (3 stack cửa hàng thật, profile `edge-multi`) và `virtual` (20+ cửa hàng ảo,
+> tật `offline`/`resend`/`concurrent_customer`), bộ đối soát L0…L4, `tests/scenarios/`. Đã có sẵn
+> một phần bằng chứng: AT-02 (mất mạng tới trung tâm), CH-7 (gửi lại lô, 479 lô trong lần chạy
+> `virtual`), 2 giờ chạy liên tục 3 cửa hàng với RAM đi ngang
+> ([progress/2026-09-24-cong-a.md](progress/2026-09-24-cong-a.md)).
 
 ---
 
@@ -101,7 +113,9 @@ ngày 1 tháng sau mà partition chưa tồn tại → **mọi INSERT đều l�
 
 Đây là sự cố production kinh điển. Bắt buộc:
 
-- Dùng **`pg_partman`**, hoặc một job tạo trước **3 tháng** partition
+- Dùng **`pg_partman`**, hoặc một job tạo trước **3 tháng** partition, **và giữ tháng trước**
+  (cửa hàng offline qua cuối tháng đồng bộ ngày 1 — ở tháng go-live partition đó không có sẵn;
+  migration `0006`, phát hiện 2026-09-24 bằng bộ giả lập `virtual`)
 - **Kiểm tra hằng ngày**: partition của tháng sau đã tồn tại chưa → cảnh báo nếu chưa
 - Test: chỉnh đồng hồ tới tháng sau, xác nhận insert vẫn chạy
 
@@ -133,11 +147,11 @@ phải lúc đang cháy:
 
 | Seam | Cách chứng minh | Khi nào |
 |---|---|---|
-| Phân vùng ledger | Nạp 50 triệu dòng, đo truy vấn có/không partition pruning | Tuần 4 |
-| PgBouncer | Mô phỏng 200 kết nối đồng thời | Tuần 4 |
-| Backfill warehouse | Xóa 1 tháng, dựng lại từ bronze, so số dòng | Tuần 3 |
-| Đồng bộ nhiều CH | Chạy 10 CH mô phỏng cùng đẩy | Tuần 4 |
-| Ngưỡng ClickHouse | Nạp dữ liệu T2 (~256 Tr dòng), đo truy vấn lớp C | Tuần 4 |
+| Phân vùng ledger | Nạp 50 triệu dòng (bộ giả lập `bulk`), đo truy vấn có/không partition pruning | Giai đoạn B |
+| PgBouncer | Mô phỏng 200 kết nối đồng thời | Giai đoạn B |
+| Backfill warehouse | Xóa 1 tháng, dựng lại từ bronze, so số dòng | Giai đoạn A (cổng A) |
+| Đồng bộ nhiều CH | Bộ giả lập `virtual`: 20 → 200 cửa hàng ảo cùng đẩy | Giai đoạn A (20) · B (200) |
+| Ngưỡng ClickHouse | Nạp dữ liệu T2 (~256 Tr dòng, bộ giả lập `bulk`), đo truy vấn lớp C | Giai đoạn B |
 
 ---
 
@@ -152,6 +166,12 @@ phải lúc đang cháy:
 > [ADR-009](adr/009-observability-stack.md).
 >
 > Khác biệt vai trò: **metrics nói *có vấn đề*, traces nói *vấn đề ở đâu*.** Cần cả hai.
+
+> ✅ **Hiện thực (2026-09-25):** các chỉ số dưới đây là metric Prometheus thật trên dashboard
+> "Sức khỏe luồng dữ liệu" — tên metric và nơi phát ở [17 §6](17-data-flow.md). Chỉ số dạng tỉ
+> lệ (`sync_failure_rate`, `event_duplicate_rate`) là biểu thức PromQL trên counter
+> (`sync_push_failures_total`, `ingest_events_total{outcome="duplicate"}`). **Chưa có alert rule**
+> (roadmap ngày 19): ngưỡng mới được vẽ trên dashboard.
 
 ### Chỉ số tại cửa hàng
 
@@ -227,10 +247,13 @@ Chạy **72 giờ liên tục** với tải mô phỏng đều đặn, theo dõi
 
 ### 6.3. Test tải (load) — Must
 
+Công cụ: **bộ giả lập**, phát tải vòng hở ([18 §1, §9](18-simulator.md)). Không dùng `k6`
+(đổi 2026-09-23). Phép đo chỉ hợp lệ khi bộ giả lập < 50% CPU.
+
 | # | Kịch bản | Mục tiêu |
 |---|---|---|
 | LD-1 | 1 cửa hàng, tải đỉnh giờ cao điểm | p95 < 500 ms |
-| LD-2 | 10 cửa hàng đồng thời đẩy đồng bộ | Trung tâm giữ p95 < 1 s |
+| LD-2 | 10 → 200 cửa hàng ảo đồng thời đẩy đồng bộ | Trung tâm giữ p95 < 1 s |
 | LD-3 | Nạp dữ liệu T2 (256 Tr dòng fact) vào warehouse | Truy vấn lớp C < 3 s |
 | LD-4 | 200 kết nối đồng thời tới Postgres trung tâm | Không lỗi; hoặc 503 tử tế |
 
@@ -243,6 +266,10 @@ Chạy **72 giờ liên tục** với tải mô phỏng đều đặn, theo dõi
 | DI-3 | `SUM(sale_payment.amount) = sale.total` | CHECK/trigger, liên tục |
 | DI-4 | Số dòng trong warehouse = số dòng trong bronze theo phân vùng | Mỗi lần chạy DAG |
 | DI-5 | Mọi `sale` ở cửa hàng đều có mặt ở trung tâm sau 1 giờ | Hằng ngày |
+
+DI-1…DI-5 là **các ô** của bảng đối soát xuyên tầng ở [17 §5](17-data-flow.md). Bộ đối soát
+kiểm tất cả trong một lần chạy, thêm một tầng mà bảng này chưa có: **manifest của bộ giả lập**,
+tức đáp án đúng.
 
 ---
 
@@ -271,5 +298,14 @@ Chạy **72 giờ liên tục** với tải mô phỏng đều đặn, theo dõi
 
 **Đánh đổi:** ít tính năng hơn, nhiều bằng chứng hơn. Đúng với ưu tiên đã nêu.
 
+> **Bước tiếp theo của cùng hướng này (2026-09-23, [ADR-010](adr/010-data-flow-first.md)):**
+> không chỉ hạ hạng tính năng phụ, mà **dời mọi tính năng dùng tại quầy** ra sau cổng B. Bằng
+> chứng không còn bị dồn về tuần cuối nữa: nó bắt đầu ngay khi luồng dữ liệu thông suốt.
+
 ---
+*Changelog: 2026-09-25 — ghi trạng thái hiện tại ở đầu doc (cổng A đạt, §6 đang làm).*
+
+*Changelog: 2026-09-23 — theo ADR-010: §6 là giai đoạn B, nguồn tải là bộ giả lập (thay `k6`),
+điều kiện đạt là `audit` = `CONVERGED`; lịch §4.4 đổi từ tuần sang giai đoạn.*
+
 *Changelog: 2026-09-11 — tạo mới theo ưu tiên "ổn định + scale" của chủ dự án.*

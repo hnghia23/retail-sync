@@ -5,6 +5,25 @@ Ký hiệu ưu tiên theo MoSCoW: **[M]** Must (v1 bắt buộc) · **[S]** Shou
 
 ---
 
+## 0. Thứ tự thực hiện — giai đoạn A/B/C *(bổ sung 2026-09-23)*
+
+> Theo [ADR-010](adr/010-data-flow-first.md), MoSCoW ở các bảng dưới **vẫn là** mức quan trọng
+> nghiệp vụ của sản phẩm cuối. Nhưng **thứ tự làm** giờ do giai đoạn quyết định: **A** luồng
+> dữ liệu → **B** chứng minh ổn định & scale → **C** tính năng. Một FR là Must vẫn có thể nằm ở
+> C. Nghĩa là nó bắt buộc cho sản phẩm, nhưng không bắt buộc để chứng minh luồng dữ liệu.
+
+| Giai đoạn | Yêu cầu | Vì sao ở đây |
+|---|---|---|
+| **A** | FR-P01, P02, P03, P04–P08, P14, P16 · FR-L02 (**use case + route, không UI**), L03, L04, L05 (hạng tính tại cửa hàng, đã có), L06, L09 · FR-P11 (**mở + đóng ca**, không kèm báo cáo ca) · FR-C02, C03 (phía ghi), C04, C05, C06, C07 | Là các chặng S1–S6 của luồng ([17](17-data-flow.md)), hoặc sinh ra một loại dữ liệu mà luồng phải chở |
+| **A — Should** | FR-P09, P15, L08 (trả hàng, **không UI**) | Sinh dữ liệu âm cho ledger/fact. Thiếu thì luồng vẫn đúng |
+| **B** | NFR-01, 02 (các dòng ghi), 03, 04, 05, 07, 08, 10 · FR-C09 (backfill) | Là phần phải **chứng minh bằng số đo** |
+| **C** | FR-P10, P12, P17 · FR-L01 (tra khách bằng SĐT), L07, L10–L13 · FR-R01…R06 · FR-C01, C08, C10 (route cho trụ sở — còn chỉ số `store_sync_lag` là B), C11, C12 · NFR-02 (dòng tra cứu khách) · NFR-06 (phần mask/nhật ký PII) | Tính năng cho người dùng, hoặc chỉ **đọc** dữ liệu mà luồng đã chở sẵn |
+
+**Ngoại lệ bắt buộc ngay từ A:** ràng buộc #10 (không PII trong log, span, warehouse) áp dụng
+cho mọi thứ viết ở A. `dim_customer` ở A **không có** cột PII nào, kể cả dạng mask.
+
+---
+
 ## 1. Yêu cầu chức năng — POS
 
 | ID | Yêu cầu | Ưu tiên | Ghi chú |
@@ -176,7 +195,8 @@ Xem [02-scale-capacity.md](02-scale-capacity.md) để biết dư địa thật 
 
 - Logic nghiệp vụ (tính điểm, xếp hạng, tính tiền) test được **không cần hạ tầng**.
 - Test tích hợp dùng DB thật qua testcontainers, không dùng mock.
-- Mô phỏng được: nhiều cửa hàng, mất mạng, đồng bộ lặp, mua đồng thời hai nơi.
+- Mô phỏng được: nhiều cửa hàng, mất mạng, đồng bộ lặp, mua đồng thời hai nơi — bằng bộ
+  giả lập có manifest đáp án ([18](18-simulator.md)).
 
 ---
 
@@ -184,18 +204,30 @@ Xem [02-scale-capacity.md](02-scale-capacity.md) để biết dư địa thật 
 
 Đây là thước đo "xong hay chưa". Mỗi kịch bản phải là một test tự động.
 
-| # | Kịch bản | Kết quả mong đợi |
-|---|---|---|
-| AT-01 | Bán đơn thường có nhận diện khách | Đơn được lưu, điểm tăng đúng công thức |
-| AT-02 | **Ngắt mạng trung tâm, bán 10 đơn, nối lại mạng** | 10 đơn đều lên trung tâm, điểm cộng đúng một lần |
-| AT-03 | **Gửi lặp cùng một sự kiện đồng bộ 5 lần** | Điểm chỉ cộng một lần |
-| AT-04 | **Cùng một khách mua đồng thời ở cửa hàng 1 và 2** | Số dư cuối = tổng cả hai, không mất dòng nào |
-| AT-05 | Khách mới ở cửa hàng 2, đã có điểm từ cửa hàng 1 | Cửa hàng 2 lấy đúng số dư từ trung tâm |
-| AT-06 | Trả hàng một đơn đã tích điểm | Điểm bị trừ đúng, ledger có dòng đối ứng |
-| AT-07 | **Chạy pipeline dữ liệu hai lần liên tiếp** | Số dòng trong warehouse không đổi |
-| AT-08 | Tắt Redis rồi bán hàng | Bán bình thường, chỉ chậm hơn |
-| AT-09 | Khách lên đủ ngưỡng điểm | Hạng tự nâng, đơn kế tiếp được giảm giá đúng % |
-| AT-10 | Đối soát: tổng ledger vs số dư vật chất hóa | Khớp tuyệt đối |
+| # | Kịch bản | Kết quả mong đợi | Giai đoạn |
+|---|---|---|---|
+| AT-01 | Bán đơn thường có nhận diện khách | Đơn được lưu, điểm tăng đúng công thức | A |
+| AT-02 | **Ngắt mạng trung tâm, bán 10 đơn, nối lại mạng** | 10 đơn đều lên trung tâm, điểm cộng đúng một lần | A |
+| AT-03 | **Gửi lặp cùng một sự kiện đồng bộ 5 lần** | Điểm chỉ cộng một lần | A |
+| AT-04 | **Cùng một khách mua đồng thời ở cửa hàng 1 và 2** | Số dư cuối = tổng cả hai, không mất dòng nào | A |
+| AT-05 | Khách mới ở cửa hàng 2, đã có điểm từ cửa hàng 1 | Cửa hàng 2 lấy đúng số dư từ trung tâm | C |
+| AT-06 | Trả hàng một đơn đã tích điểm | Điểm bị trừ đúng, ledger có dòng đối ứng | A — Should |
+| AT-07 | **Chạy pipeline dữ liệu hai lần liên tiếp** | Số dòng trong warehouse không đổi | A |
+| AT-08 | Tắt Redis rồi bán hàng | Bán bình thường, chỉ chậm hơn | B (cùng CH-5) |
+| AT-09 | Khách lên đủ ngưỡng điểm | Hạng tự nâng, đơn kế tiếp được giảm giá đúng % | C |
+| AT-10 | Đối soát: tổng ledger vs số dư vật chất hóa | Khớp tuyệt đối | A |
+
+Ở giai đoạn A/B, mọi AT chạy **bằng bộ giả lập** ([18](18-simulator.md)), không qua UI. Điều
+kiện đạt chung: `simulator audit` trả `CONVERGED` ([17 §5](17-data-flow.md)).
+
+**Kết quả (2026-09-24, compose thật):** AT-01, 02, 03, 04, 07, 10 **đạt** — test tự động ở
+`tests/scenarios/` ([16 §2](16-test-plan.md)). AT-06 (Should) cắt theo phương án "nếu trượt" của
+cổng A. AT-08 ở giai đoạn B, AT-05 và AT-09 ở C.
 
 ---
+*Changelog: 2026-09-25 — §5 thêm kết quả nghiệm thu của giai đoạn A.*
+
+*Changelog: 2026-09-23 — thêm §0 (thứ tự thực hiện theo [ADR-010](adr/010-data-flow-first.md)) và cột
+"Giai đoạn" cho AT. Không đổi mức MoSCoW của FR nào.*
+
 *Changelog: 2026-09-11 — tạo mới.*

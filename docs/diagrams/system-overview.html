@@ -168,8 +168,8 @@
     <div class="meta-row">
       <span class="pill accent"><span class="dot"></span>Stack đã chốt</span>
       <span class="pill">Ưu tiên: ổn định + scale</span>
-      <span class="pill">11 tài liệu · 9 ADR</span>
-      <span class="pill">2026-09-11</span>
+      <span class="pill">10 ADR · luồng dữ liệu trước</span>
+      <span class="pill">Cổng A đạt · 2026-09-24</span>
     </div>
   </header>
 
@@ -182,7 +182,7 @@
       <div class="diagram-scroll">
         <figure>
           <svg viewBox="0 0 1680 780" xmlns="http://www.w3.org/2000/svg" role="img"
-               aria-label="Sơ đồ kiến trúc retail-sync: cửa hàng gồm UI, Edge API modular monolith với ba module pos/loyalty/reporting, PostgreSQL 18 và Redis, kết nối qua một transaction tới sổ cái điểm; sync worker đọc outbox và đẩy sự kiện qua ranh giới mạng tới Central API; trung tâm ghi vào PostgreSQL point_ledger có phân vùng; dữ liệu chảy T cộng 1 qua Airflow vào MinIO, dbt, ClickHouse, rồi Metabase.">
+               aria-label="Sơ đồ kiến trúc retail-sync: cửa hàng gồm bộ giả lập (nguồn dữ liệu hiện tại) và UI, Edge API modular monolith với ba module pos/loyalty/reporting, PostgreSQL 18 và Redis, kết nối qua một transaction tới sổ cái điểm; sync worker đọc outbox và đẩy sự kiện qua ranh giới mạng tới Central API; trung tâm ghi vào PostgreSQL point_ledger có phân vùng; dữ liệu chảy T cộng 1 qua Airflow vào MinIO, dbt, ClickHouse, rồi Metabase.">
             <defs>
               <marker id="arrowInk" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
                 <path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"></path>
@@ -229,8 +229,8 @@
 
             <!-- ============ ROW A — UI (store only) ============ -->
             <rect x="40" y="110" width="600" height="62" rx="4" fill="var(--bg-raised)" stroke="var(--line-strong)" stroke-width="1.5"></rect>
-            <text x="60" y="136" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">POS UI + BÁO CÁO CA</text>
-            <text x="60" y="156" font-size="10.5" fill="var(--ink-soft)">HTMX + Alpine.js — server-rendered, không build step</text>
+            <text x="60" y="136" font-family="Fraunces, serif" font-weight="600" font-size="13" fill="var(--ink)">BỘ GIẢ LẬP (giai đoạn A/B) · POS UI (giai đoạn C)</text>
+            <text x="60" y="156" font-size="10.5" fill="var(--ink-soft)">Cùng đi qua use case thật — UI HTMX + Alpine đóng băng tới giai đoạn C (ADR-010)</text>
 
             <line x1="340" y1="172" x2="340" y2="190" stroke="var(--ink)" stroke-width="1.25" marker-end="url(#arrowInk)"></line>
             <text x="352" y="184" font-size="9.5" fill="var(--ink-soft)">HTTP</text>
@@ -260,7 +260,7 @@
             <text x="1136" y="214" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">AIRFLOW 3 (LocalExecutor)</text>
             <text x="1136" y="230" font-size="10" font-style="italic" fill="var(--ink-soft)">+ astronomer-cosmos</text>
             <rect x="1136" y="240" width="448" height="40" rx="3" fill="var(--bg)" stroke="var(--line-strong)"></rect>
-            <text x="1360" y="264" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">dbt-core — staging → intermediate → marts</text>
+            <text x="1360" y="264" text-anchor="middle" class="mono" font-size="10.5" fill="var(--ink)">dbt-core — staging (silver) → dim_* · fact_*</text>
 
             <!-- crossing arrow f: lookup (edge -> central, timeout, non-blocking) -->
             <line x1="640" y1="236" x2="710" y2="250" stroke="var(--ink-soft)" stroke-width="1.25" stroke-dasharray="7 5" marker-end="url(#arrowInk)"></line>
@@ -335,11 +335,11 @@
             <rect x="1120" y="352" width="480" height="128" rx="4" fill="var(--bg-raised)" stroke="var(--ink)" stroke-width="1.5"></rect>
             <text x="1136" y="374" font-family="Fraunces, serif" font-weight="600" font-size="13.5" fill="var(--ink)">MinIO + Parquet</text>
             <rect x="1136" y="392" width="440" height="26" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
-            <text x="1356" y="409" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">bronze/&lt;nguồn&gt;/dt=recorded_at/…</text>
+            <text x="1356" y="409" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">bronze/central/&lt;bảng&gt;/dt=recorded_at/…</text>
             <circle cx="1580" cy="392" r="10" fill="var(--accent)"></circle>
             <text x="1580" y="396" text-anchor="middle" font-weight="700" font-size="9.5" fill="var(--bg-raised)">6</text>
             <rect x="1136" y="424" width="440" height="26" rx="2" fill="var(--bg)" stroke="var(--line-strong)"></rect>
-            <text x="1356" y="441" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">silver/&lt;thực_thể&gt;/dt=…/</text>
+            <text x="1356" y="441" text-anchor="middle" class="mono" font-size="10" fill="var(--ink)">silver Parquet — v2 · POC: staging dbt trong ClickHouse</text>
 
             <!-- critical-path arrow e -->
             <line x1="240" y1="292" x2="240" y2="352" stroke="var(--accent)" stroke-width="2.5" marker-end="url(#arrowAccent)"></line>

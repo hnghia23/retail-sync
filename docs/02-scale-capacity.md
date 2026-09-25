@@ -123,6 +123,19 @@ Toàn bộ phải chạy trên một laptop. Ước lượng RAM khi chạy 3 c�
 | Metabase | 900 MB | Nếu kịp |
 | **Tổng nếu bật tất cả** | **~7 GB** | |
 
+✅ **Đo thật (2026-09-24, `docker stats`, spike S1)** — ước lượng trên dư khoảng gấp đôi:
+
+| Thành phần (đo) | RAM |
+|---|---:|
+| Mỗi stack cửa hàng (PG + Redis + API + sync worker) | ~230 MB |
+| Postgres + API trung tâm | ~150 MB |
+| MinIO / ClickHouse | ~100 MB / ~520 MB |
+| Airflow 3.3.2: api-server / dag-processor / scheduler / DB meta | ~310 / ~250 / 1 160 (đỉnh 2 090) / ~80 MB |
+| **3 cửa hàng + trung tâm + data platform (20 container)** | **~3,4 GiB**, đỉnh **~3,9 GiB** giữa lượt DAG |
+
+Chưa có Metabase và `observability` (~0,5 GiB, đo 2026-09-18). Scheduler chiếm phần lớn khi các
+task dbt chạy song song (LocalExecutor chạy task như tiến trình con của nó).
+
 Vẫn vừa máy 16GB, nhưng sát hơn trước — đây là cái giá của [ADR-007](adr/007-airflow-over-dagster.md)
 (Airflow thay Dagster: +~1.3 GB). **Bắt buộc dùng LocalExecutor**, không dùng CeleryExecutor
 (bỏ được Celery worker + Redis = 2 container, ~800 MB).
@@ -148,11 +161,12 @@ Docker Compose dùng **profile** để bật/tắt từng phần: `--profile edg
 
 ## 6. Cách kiểm chứng các con số này
 
-Đừng tin bảng trên. Ở tuần 4, chạy thật:
+Đừng tin bảng trên. Ở **giai đoạn B** ([06](06-roadmap.md), [ADR-010](adr/010-data-flow-first.md)), chạy thật:
 
-1. **Sinh dữ liệu**: script tạo N cửa hàng × M đơn/ngày × D ngày, phân bố thực tế (cao
-   điểm trưa/tối, cuối tuần nhiều hơn, phân phối Pareto cho sản phẩm).
-2. **Đo tải**: `locust` hoặc `k6` bắn vào API POS, ghi p95/p99.
+1. **Sinh dữ liệu**: bộ giả lập ([18](18-simulator.md)), profile `t0`…`t3` lấy đúng các bậc
+   ở §1. Phân bố thực tế: hai đỉnh trưa/tối, cuối tuần nhiều hơn, Zipf cho sản phẩm.
+2. **Đo tải**: cũng bộ giả lập đó, phát tải vòng hở vào Edge API và Central API, ghi p95/p99.
+   Không dùng `locust`/`k6`, vì chúng sẽ thành bộ sinh dữ liệu thứ hai ([18 §9](18-simulator.md)).
 3. **Đo dung lượng**: nạp 1 năm dữ liệu T2, đo kích thước thật của Postgres và ClickHouse.
 4. **Thử hỗn loạn**: ngắt mạng bằng `docker network disconnect`, đo thời gian hội tụ sau
    khi nối lại.
@@ -160,4 +174,8 @@ Docker Compose dùng **profile** để bật/tắt từng phần: `--profile edg
 Ghi kết quả thật ngược lại vào doc này, thay cho ước lượng.
 
 ---
+*Changelog: 2026-09-25 — thêm RAM đo thật cạnh bảng ước lượng.*
+
+*Changelog: 2026-09-23 — §6 trỏ về bộ giả lập và giai đoạn B (ADR-010).*
+
 *Changelog: 2026-09-11 — tạo mới, số liệu là ước lượng chưa đo thật.*

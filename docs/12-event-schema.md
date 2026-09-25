@@ -36,6 +36,10 @@
 `recorded_at` **không** nằm trong envelope — trung tâm tự gán `now()` khi nhận, dùng để
 phân vùng bronze (ràng buộc #3) và phát hiện lệch đồng hồ.
 
+Envelope dựng ở **một chỗ duy nhất**: `shared.events.build_envelope()`. Outbox thật
+(`shared.outbox.enqueue_event`) và cửa hàng ảo của bộ giả lập ([18 §3](18-simulator.md)) cùng
+gọi hàm này, nên không thể lệch nhau ở một field nào đó.
+
 ## 3. Các loại sự kiện
 
 ### 3.1. `SaleCompleted`
@@ -105,12 +109,30 @@ Sinh khi trả hàng (một phần hoặc toàn bộ). **Không sửa `SaleCompl
 ```jsonc
 {
   "customer_id": "01935abc-...",
-  "phone_hash": "sha256:...",
-  "phone_enc": "base64:...",
-  "name_enc": "base64:...",
+  "phone_hash": "…",         // chuỗi opaque, trung tâm lưu nguyên và dùng để tra/dò trùng
+  "phone_enc": "q83vEjRW…",  // base64 chuẩn (RFC 4648) của ciphertext, KHÔNG có tiền tố
+  "name_enc": "q83vEjRW…",   // như trên; null nếu chưa có
   "created_locally_at_store": "store-042" | null   // C02: tạo khi offline
 }
 ```
+
+`*_enc` không phải base64 hợp lệ → trung tâm từ chối vĩnh viễn (`retryable=false`).
+
+**`phone_hash` = HMAC-SHA256(`PII_HASH_KEY`, SĐT đã chuẩn hóa về dạng `0xxxxxxxxx`)**, hex
+(`shared/pii.py`, 2026-09-23). Chuẩn hóa trước khi băm là bắt buộc: `0901 234 567` và
+`+84901234567` phải ra cùng một hash, nếu không C03 không bao giờ dò ra trùng. Khóa HMAC
+**giống nhau ở mọi cửa hàng và trung tâm**. SHA-256 trần thì dò ngược được hết 10⁹ số VN
+trong vài phút. Ở giai đoạn A, `phone_enc` và `name_enc` luôn là `null`: chưa có khóa mã
+hóa, nên cửa hàng không thu tên và không lưu SĐT dạng đọc được (ràng buộc #10).
+
+`occurred_at` của `CustomerCreated` là **lúc đăng ký tại cửa hàng**. Trung tâm dùng nó làm
+`customer.joined_at`, không dùng giờ nhận sự kiện: cửa hàng offline 3 ngày thì ngày gia nhập
+không được lệch 3 ngày.
+
+**Trùng `phone_hash` (case C03) KHÔNG phải lỗi:** hai cửa hàng offline có thể cùng tạo khách
+cho một SĐT. Trung tâm ghi cả hai `customer_id` và đưa cặp vào `customer_duplicate_candidate`
+để gộp thủ công — từ chối bản thứ hai sẽ làm điểm của khách đó vỡ khóa ngoại và mất khỏi
+trung tâm. `CustomerCreated` trùng `customer_id` đã có thì bỏ qua (cùng ID = cùng khách).
 
 ### 3.5. `ShiftClosed`
 
@@ -151,4 +173,9 @@ ON CONFLICT (event_id) DO NOTHING;
 không lặp" nên được bỏ qua bước này.
 
 ---
+*Changelog: 2026-09-24 — §2: envelope dựng bằng `build_envelope()` dùng chung.*
+
+*Changelog: 2026-09-23 — §3.4: công thức `phone_hash` (HMAC + chuẩn hóa SĐT), `*_enc` null ở
+giai đoạn A, `occurred_at` → `joined_at`.*
+
 *Changelog: 2026-09-11 — tạo mới.*

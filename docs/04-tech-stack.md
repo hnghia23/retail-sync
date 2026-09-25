@@ -18,12 +18,13 @@ Mỗi lựa chọn ở đây phải trả lời được ba câu: **Vì sao ch�
 | DB trung tâm | **PostgreSQL 18** | Xem [ADR-001](adr/001-postgres-everywhere.md) | PgBouncer → read replica → Citus/CockroachDB |
 | Truy cập DB | **SQLAlchemy 2.0 (async) + Alembic** | ORM chín muồi, migration có version | — |
 | Đồng bộ | **Transactional Outbox + HTTP** | Xem [ADR-003](adr/003-outbox-not-kafka.md) | Debezium CDC → Redpanda, code không đổi |
-| Lake | **MinIO + Parquet** (phân vùng Hive) | S3 API, chạy local, bất biến, nén tốt | Đổi endpoint sang S3/GCS; nâng lên Iceberg khi cần schema evolution |
+| Lake | **MinIO + Parquet** (phân vùng Hive) — image `quay.io/minio/minio` ghim bản (Docker Hub `minio/minio` đã không còn, 2026-09-24) | S3 API, chạy local, bất biến, nén tốt | Đổi endpoint sang S3/GCS; nâng lên Iceberg khi cần schema evolution |
 | Warehouse | **ClickHouse** | Xem [ADR-005](adr/005-clickhouse-warehouse.md) | Thêm shard hoặc ClickHouse Cloud |
-| Biến đổi | **dbt-core + dbt-clickhouse** | Test, lineage, docs, incremental — miễn phí. Đòn bẩy cao nhất trong cả stack. Đã kiểm chứng: dbt Core v2.0 + **Fusion engine (viết lại bằng Rust) vẫn open source Apache 2.0** sau khi dbt Labs sáp nhập Fivetran (01/06/2026) | SQLMesh nếu incremental phức tạp lên; dbt Cloud nếu cần managed |
-| Điều phối | **Airflow 3 + LocalExecutor** | Chủ dự án đã có kinh nghiệm. Xem [ADR-007](adr/007-airflow-over-dagster.md) | CeleryExecutor → k8s executor → Astronomer/MWAA |
-| dbt ↔ Airflow | **astronomer-cosmos** | Render mỗi dbt model thành một task Airflow, giữ được lineage. Bù lại lợi thế `dagster-dbt` | — |
-| Trích xuất | **dlt** *(hoặc Python thuần)* | Tự lo tăng dần, schema evolution, quản lý state | — |
+| Biến đổi | **dbt-core + dbt-clickhouse** (1.12.5 + 1.10.3, ghim ở `data_platform/requirements-dbt.txt`, venv riêng) | Test, lineage, docs, incremental — miễn phí. Đòn bẩy cao nhất trong cả stack. Đã kiểm chứng: dbt Core v2.0 + **Fusion engine (viết lại bằng Rust) vẫn open source Apache 2.0** sau khi dbt Labs sáp nhập Fivetran (01/06/2026) | SQLMesh nếu incremental phức tạp lên; dbt Cloud nếu cần managed |
+| Điều phối | **Airflow 3 + LocalExecutor** (3.3.2: api-server, scheduler, dag-processor; không triggerer) | Chủ dự án đã có kinh nghiệm. Xem [ADR-007](adr/007-airflow-over-dagster.md) | CeleryExecutor → k8s executor → Astronomer/MWAA |
+| dbt ↔ Airflow | **astronomer-cosmos** (1.15.1, `InvocationMode.SUBPROCESS`) | Render mỗi dbt model thành một task Airflow, giữ được lineage. Bù lại lợi thế `dagster-dbt` | — |
+| Trích xuất | **Python thuần** — `packages/pipeline` (asyncpg + pyarrow + httpx), không `dlt` ([ADR-008](adr/008-remaining-decisions.md) Q2) | Lake bất biến chính là trạng thái; mép cửa sổ `extract_horizon()` ([17 §4](17-data-flow.md)) — thứ `dlt` không biết | Debezium CDC khi cần trễ < phút |
+| Nguồn dữ liệu test | **Bộ giả lập** `packages/simulator` (chế độ `edge`, `virtual`; `bulk` ở B) | Thay UI và thay `k6` ([ADR-010](adr/010-data-flow-first.md), [18](18-simulator.md)) | Nhiều tiến trình giả lập chia dải cửa hàng |
 | BI | **Metabase** | Cài 1 container, người không biết SQL vẫn dùng được | Superset nếu cần nâng cao |
 | Xác thực | **JWT (PyJWT) + Argon2** | Chuẩn, stateless, hợp với edge | Keycloak nếu cần SSO |
 | Log | **structlog** → JSON | `trace_id` xuyên hệ thống | Loki/ELK |
@@ -118,26 +119,32 @@ retail-sync/
 │   │   ├── reporting/         #   lớp truy vấn A — đọc thẳng PG cửa hàng
 │   │   ├── sync/              #   outbox worker (tiến trình riêng)
 │   │   └── migrations/        #   Alembic — schema cửa hàng
-│   └── central/               # app trung tâm
-│       ├── ingest/            #   nhận sự kiện + chốt chặn idempotency
-│       ├── lookup/            #   tra khách + master data
-│       ├── reporting/         #   lớp truy vấn B
-│       ├── ops/               #   job vận hành (bảo trì partition, đối soát)
-│       └── migrations/        #   Alembic — schema trung tâm
+│   ├── central/               # app trung tâm
+│   │   ├── ingest/            #   nhận sự kiện + chốt chặn idempotency
+│   │   ├── lookup/            #   tra khách + master data (giai đoạn C)
+│   │   ├── reporting/         #   lớp truy vấn B (giai đoạn C)
+│   │   ├── ops/               #   job vận hành: seed, cấp khóa cửa hàng, partition, đối soát INV-4
+│   │   └── migrations/        #   Alembic — schema trung tâm
+│   ├── pipeline/              # S4 trích xuất + S5 nạp bronze — ĐỘC LẬP (chạy cả trong image Airflow)
+│   │   └── ddl/bronze.sql     #   DDL bronze ClickHouse (bẫy 4)
+│   └── simulator/             # bộ giả lập: generator · sinks (edge, virtual) · quirks · manifest · audit L0…L4
 ├── data_platform/
-│   ├── airflow/dags/          # định nghĩa DAG (ADR-007)
-│   ├── dbt/                   # staging → intermediate → marts
-│   └── seeds/                 # master data tĩnh
-├── simulator/                 # sinh dữ liệu + mô phỏng nhiều cửa hàng (LD-1..4, CH-6)
+│   ├── airflow/dags/          # DAG `retail_pipeline`: S4 → S5 → S6 (ADR-007)
+│   ├── dbt/                   # staging (silver) → marts: dim_* + fact_*
+│   ├── requirements.txt       # môi trường Airflow (kèm constraint chính thức)
+│   └── requirements-dbt.txt   # dbt — venv riêng, một chỗ ghim bản
 ├── infra/
-│   ├── compose.yaml           # profile: edge | central | data | bi | observability
+│   ├── compose.yaml           # profile: edge | edge-multi | central | data | bi | observability
 │   ├── .env.example
-│   └── docker/                # app.Dockerfile (dùng chung 3 service) + airflow.Dockerfile
-├── tests/                     # unit · integration · scenarios · load — xem docs/16
+│   └── docker/                # app.Dockerfile (dùng chung edge/central) + airflow.Dockerfile
+├── tests/                     # unit · integration · scenarios (opt-in, compose thật) — xem docs/16
+├── runs/                      # đầu ra bộ giả lập: manifest, audit, khóa cửa hàng ảo (gitignore)
 └── store/, central/           # ← code v1, CHỈ để tham khảo (docs/09-v1-postmortem.md)
 ```
 
-Ranh giới module được cưỡng chế bằng `import-linter` (`.importlinter`, 7 hợp đồng) trong CI.
+Ranh giới module được cưỡng chế bằng `import-linter` (`.importlinter`, **12 hợp đồng**) trong CI:
+ngoài ranh giới của edge, còn cấm `pipeline` import code ứng dụng, và chỉ cho `simulator` import
+4 module thuần của edge (cho chế độ `virtual`).
 
 ## 5. Quyết định còn treo
 
@@ -153,6 +160,10 @@ Ba thay đổi so với bản đầu của doc này:
 | Multi-tenant | Để sẵn `tenant_id` | **Không thêm cột** | Database-per-tenant tốt hơn, không tốn gì bây giờ |
 
 ---
+*Changelog: 2026-09-25 — bảng stack theo hiện thực (bản ghim của Airflow/cosmos/dbt, MinIO chuyển
+quay.io, trích xuất Python thuần thay `dlt`, thêm bộ giả lập); §4 thêm `packages/pipeline`,
+`packages/simulator`, `runs/`, profile `edge-multi`, 12 hợp đồng import.*
+
 *Changelog: 2026-09-17 — §4 đổi từ "cấu trúc dự kiến" sang cấu trúc thật đang có trong repo
 (bỏ `legacy/` chưa dùng, `data_platform/dagster/` → `airflow/dags/`, thêm `central/ops/`).*
 

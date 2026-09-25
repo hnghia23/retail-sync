@@ -1,0 +1,14 @@
+# Provision dashboard của retail-sync vào Grafana trong grafana/otel-lgtm (compose mount file này
+# vào /otel-lgtm/grafana/conf/provisioning/dashboards/). Dashboard là file trong repo, không phải
+# trạng thái trong volume: sửa trên UI được (allowUiUpdates) nhưng muốn giữ thì xuất JSON về
+# infra/observability/grafana/dashboards/.
+apiVersion: 1
+
+providers:
+  - name: retail-sync
+    folder: retail-sync
+    type: file
+    allowUiUpdates: true
+    updateIntervalSeconds: 30
+    options:
+      path: /otel-lgtm/retail-sync-dashboards
