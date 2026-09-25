@@ -157,26 +157,26 @@ thử nghiệm ở [08 §6](08-reliability-and-scale.md).
 |---|---|---|
 | 15 | ✅ **Nợ từ A:** dashboard "sức khỏe luồng" ([17 §6](17-data-flow.md)) — độ tươi L2/L4, trễ theo chặng, chênh đối soát; audit báo độ tươi | Xong 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-dashboard.md)): metric OTel ở edge-api/sync worker/central-api, bộ giám sát `pipeline monitor`, dashboard provision từ repo, `audit --watch --otlp`. Kèm: job INV-4 lên lịch (`central-reconcile`), sửa `/health/outbox` đếm cả dead-letter, mật khẩu ClickHouse ra khỏi URL |
 | 15 | ✅ **Nợ từ A:** job CI dựng compose + seed, chạy `tests/scenarios/` mỗi PR ([16 §6](16-test-plan.md)) | Xong 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-ci.md)): `infra/bootstrap.py` (dựng từ con số 0, chạy lại được) + job `scenarios`; dữ liệu master tổng hợp `tests/fixtures/crawl_data/` vì `crawl_data/` thật không nằm trong git |
-| 15 | **Test hỗn loạn CH-1…CH-7** trên luồng đang chạy: ngắt mạng, `kill -9` app, `kill -9` Postgres, đầy đĩa, tắt Redis, 10 CH nối lại cùng lúc, gửi lặp | 🔴 Must — sau mỗi kịch bản `audit` phải về `CONVERGED` |
-| 16 | Bộ giả lập bước 6–7: sink `bulk` + test hợp đồng schema bronze, profile `t2`/`t3` | Must |
-| 16 | **Test tải LD-1…LD-4** bằng bộ giả lập (vòng hở) | 🔴 Must. Thay `k6` — [18 §9](18-simulator.md) |
-| 17 | **Kiểm chứng scale seam:** 50 triệu dòng `point_ledger` + đo partition pruning; dữ liệu T2 (~256 Tr dòng fact) vào ClickHouse, truy vấn lớp C < 3 s; 200 kết nối đồng thời | 🔴 Must — [08 §4.4](08-reliability-and-scale.md). Ghi số đo thật vào [02](02-scale-capacity.md) |
+| 15 | ✅ **Test hỗn loạn CH-1…CH-7** trên luồng đang chạy: ngắt mạng, `kill -9` app, `kill -9` Postgres, đầy đĩa, tắt Redis, 10 CH nối lại cùng lúc, gửi lặp | Xong 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-chung-minh.md)): **cả 7 đạt**, mọi kịch bản `CONVERGED`. CH-1 mất trung tâm 30 phút → hội tụ 168 s sau khi nối lại; CH-3 `kill -9` Postgres ×3 → 0 giao dịch đã commit bị mất. ⚠️ CH-6: p95 `POST /events` 9,3 s lúc dồn (máy đang bận) — đo lại ở LD-2 |
+| 16 | ✅ Bộ giả lập bước 6–7: sink `bulk` + test hợp đồng schema bronze, profile `t2`/`t3` | Xong 2026-09-25: prefix lake riêng, nạp bằng bộ nạp thật; dữ liệu T2 24 tháng đã sinh (79,3 Tr đơn, 262,9 Tr dòng hàng) |
+| 16 | **Test tải LD-1…LD-4** bằng bộ giả lập (vòng hở) | 🔴 Must. Thay `k6` — [18 §9](18-simulator.md). ⏳ công cụ xong (`tests/scenarios/test_load.py`, `infra/loadtest/`), chưa chạy |
+| 17 | **Kiểm chứng scale seam:** 50 triệu dòng `point_ledger` + đo partition pruning; dữ liệu T2 (~256 Tr dòng fact) vào ClickHouse, truy vấn lớp C < 3 s; 200 kết nối đồng thời | 🔴 Must — [08 §4.4](08-reliability-and-scale.md). Ghi số đo thật vào [02](02-scale-capacity.md). ⏳ dữ liệu đã sinh (50,1 Tr dòng ledger), chưa nạp/đo. Khi viết công cụ lộ ra **dbt tốn O(lịch sử) mỗi giờ** — đã sửa sang O(tháng), chưa đo ở T2 |
 | 17 | Backfill 7 ngày quá khứ (FR-C09) | Should |
 | 18 | **Test ngâm 72h** chạy nền (`edge` t0 + `virtual` t1): rò rỉ bộ nhớ, bloat `outbox`, trôi độ trễ, `audit` định kỳ | 🔴 Must — chạy nền trong ngày 18–20 |
-| 18 | **Đo overhead OTel:** chạy LD-1 hai lần, có và không có instrumentation | 🔴 Must — > 5% thì giảm tỉ lệ lấy mẫu ([ADR-009](adr/009-observability-stack.md)) |
-| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must — 2026-09-25: ✅ 15 rule provision từ repo (đánh giá được, `inactive`), ✅ log JSON + `trace_id`. ⏳ **kích hoạt thử** từng rule (cùng test hỗn loạn) · chưa có contact point |
-| 19 | Partition tháng sau **tự tồn tại**, test bằng cách chỉnh đồng hồ; job dọn `outbox` đã gửi > 7 ngày | 🔴 Must — 2026-09-25: ✅ lịch `central-maintenance` (trước đó **không có gì gọi** hàm tạo partition — xem [progress](progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ dọn outbox trong sync worker. ⏳ thử bằng chỉnh đồng hồ |
+| 18 | **Đo overhead OTel:** chạy LD-1 hai lần, có và không có instrumentation | 🔴 Must — > 5% thì giảm tỉ lệ lấy mẫu ([ADR-009](adr/009-observability-stack.md)). ⏳ công cụ xong (`test_otel_overhead`: bật/tắt/bật/tắt), chưa chạy |
+| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must — 2026-09-25: ✅ **21 rule** (đủ bảng docs/08 §5) + contact point webhook → `alert-sink`, ✅ log JSON + `trace_id`. 🟡 **16/21 đã kích hoạt thử** (Grafana kêu + thông báo tới thật, [progress](progress/2026-09-25-giai-doan-b-chung-minh.md)). ⏳ `rs-db-pool`, `rs-central-pg-conn`, `rs-loaded-until`, `rs-transform`, `rs-maintenance`; chạy lại `rs-horizon` |
+| 19 | ✅ Partition tháng sau **tự tồn tại**, test bằng cách chỉnh đồng hồ; job dọn `outbox` đã gửi > 7 ngày | 2026-09-25: ✅ lịch `central-maintenance` (trước đó **không có gì gọi** hàm tạo partition — xem [progress](progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ dọn outbox trong sync worker, ✅ **chỉnh đồng hồ bằng libfaketime**: 14 lần sang tháng đều đúng partition (`test_partition_clock.py`). Kèm: quét toàn bộ INV-4 hằng tháng giờ cũng được lên lịch (trước đó không ai gọi) |
 | 20 | Backup + khôi phục Postgres cửa hàng (quy trình, chạy thử một lần) | Must — 2026-09-25: ✅ sidecar `edge-backup-*` (hằng ngày, giữ 7), ✅ `store_backup.py verify` đã chạy (khôi phục vào DB tạm, 7 bảng khớp). ⏳ `restore` thật trên DB cửa hàng chưa chạy thử |
 | 20 | Cập nhật docs bằng số liệu đo thật; README chạy thử từ `git clone` | |
 
 ### 🚪 Cổng B (nghiệm thu POC)
 
 **Ổn định**
-- [ ] **CH-1…CH-7 đều đạt**, sau mỗi kịch bản `audit` = `CONVERGED`. Đặc biệt CH-3 (`kill -9` Postgres → 0 giao dịch đã commit bị mất)
+- [x] **CH-1…CH-7 đều đạt**, sau mỗi kịch bản `audit` = `CONVERGED`. Đặc biệt CH-3 (`kill -9` Postgres → 0 giao dịch đã commit bị mất) — 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-chung-minh.md))
 - [ ] **Test ngâm 72h:** bộ nhớ không rò rỉ, `outbox` không bloat, p95 không trôi, `audit` không lần nào `DIVERGED`
 - [ ] **DI-1…DI-5** đều xanh
-- [ ] Mọi ngưỡng cảnh báo đã cấu hình và **đã kích hoạt thử được**
-- [ ] Partition tháng sau tự tồn tại
+- [ ] Mọi ngưỡng cảnh báo đã cấu hình và **đã kích hoạt thử được** — 🟡 21/21 cấu hình, 16/21 đã kích hoạt thử
+- [x] Partition tháng sau tự tồn tại — `central-maintenance` + test chỉnh đồng hồ (libfaketime)
 
 **Scale**
 - [ ] **LD-1…LD-4 đạt mục tiêu** p95, bộ giả lập < 50% CPU trong mọi phép đo

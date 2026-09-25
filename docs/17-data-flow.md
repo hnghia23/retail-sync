@@ -308,8 +308,15 @@ S1 → S2 → S3 → S4–S6 → toàn luồng. Công cụ ở [10-observability
 `occurred_at` theo định nghĩa §3, chỉ có nghĩa khi cửa hàng dùng đồng hồ thật (chế độ `edge`,
 production). Với `virtual`, dùng `audit_behind_seconds` (tụt sau tầng tươi nhất).
 
-Ngoài giờ bán, độ tươi và "lần cuối thấy cửa hàng" tăng dần là bình thường (cửa hàng đóng cửa
-22:00). Ngưỡng cảnh báo (roadmap ngày 19) phải tính tới giờ mở cửa, không đặt ngưỡng phẳng.
+Ngoài giờ bán, độ tươi tăng dần là bình thường (cửa hàng đóng cửa 22:00). Ngưỡng cảnh báo phải
+tính tới giờ mở cửa, không đặt ngưỡng phẳng — nên độ tươi CHƯA có cảnh báo.
+
+> ✅ **2026-09-25 (giai đoạn B):** "lần cuối thấy cửa hàng" KHÔNG còn tăng ngoài giờ bán: worker rảnh
+> gửi **heartbeat** (lô rỗng) mỗi 5 phút, trung tâm đặt `updated_at` và `lag_seconds = 0` (outbox
+> trống = đã bắt kịp). Nhờ vậy có cảnh báo `rs-store-silent` (im lặng > 1 giờ, chỉ cửa hàng
+> `watched`). Thêm metric tài nguyên: `disk_used_ratio`, `db_pool_used_ratio` (edge-api, central-api),
+> `pg_connections_used_ratio`, `reconcile_full_last_run_age_seconds` (bộ giám sát). Dashboard có hàng
+> "Tài nguyên"; 21 cảnh báo, sinh từ `infra/observability/build_{dashboard,alerts}.py`.
 
 ## 7. "Ổn định" nghĩa là gì — tiêu chí đo được
 

@@ -130,7 +130,9 @@ ngày 1 tháng sau mà partition chưa tồn tại → **mọi INSERT đều l�
 > chưa bao giờ gọi). Partition tạo sẵn tới 2026-12-01: hệ thống sẽ chết đúng 00:00 ngày 01/01/2027.
 > Giờ service `central-maintenance` (`central.ops.maintenance`) tạo trước + kiểm mỗi giờ, cùng
 > lượt với đối soát INV-4; vùng đệm lên dashboard (`point_ledger_partition_months_ahead`) và có
-> cảnh báo khi < 2 tháng. Test "chỉnh đồng hồ" vẫn chưa chạy.
+> cảnh báo khi < 2 tháng. ✅ Test "chỉnh đồng hồ" đã chạy (`tests/integration/test_partition_clock.py`,
+> Postgres với libfaketime): 14 lần sang tháng, mỗi lần đúng partition, kể cả điểm của cửa hàng
+> offline qua đêm cuối tháng.
 
 ### 4.2. Job đối soát phải tăng dần, không quét toàn bộ
 
@@ -147,6 +149,11 @@ WHERE customer_id IN (
 )
 -- Cộng thêm: mỗi tháng quét toàn bộ một lần vào giờ thấp điểm
 ```
+
+> ✅ **2026-09-25:** lượt "mỗi tháng quét toàn bộ" trước đó KHÔNG được lên lịch (lệnh `--full` có,
+> không ai gọi — cùng loại lỗi với hàm tạo partition). Giờ `central-maintenance` tự chạy nó mỗi 30
+> ngày trong 01–05 giờ cửa hàng (`RECONCILE_FULL_*`), mốc riêng `point_balance_vs_ledger:full`, cảnh
+> báo `rs-reconcile-full` khi > 35 ngày.
 
 ### 4.3. Cập nhật snapshot phải tăng dần
 
@@ -180,6 +187,13 @@ phải lúc đang cháy:
 >
 > Khác biệt vai trò: **metrics nói *có vấn đề*, traces nói *vấn đề ở đâu*.** Cần cả hai.
 
+> ✅ **Cập nhật 2026-09-25 (lần 2):** đủ mọi ngưỡng của hai bảng dưới — **21 rule** (thêm
+> `disk_used_pct` → `disk_used_ratio`, `db_connections_used` → `db_pool_used_ratio`,
+> `pg_connections_used` → `pg_connections_used_ratio`, `circuit_breaker_state` → `sync_consecutive_failures`
+> dương suốt 10 phút, `stores_not_seen_recently` nhờ HEARTBEAT của worker rảnh, và quét toàn bộ INV-4
+> > 35 ngày). Contact point webhook → service `alert-sink`. **16/21 đã kích hoạt thử bằng điều kiện
+> thật** — bảng ở [progress](progress/2026-09-25-giai-doan-b-chung-minh.md) §5.
+>
 > ✅ **Hiện thực (2026-09-25):** các chỉ số dưới đây là metric Prometheus thật trên dashboard
 > "Sức khỏe luồng dữ liệu" — tên metric và nơi phát ở [17 §6](17-data-flow.md). Chỉ số dạng tỉ
 > lệ (`sync_failure_rate`, `event_duplicate_rate`) là biểu thức PromQL trên counter
@@ -245,6 +259,11 @@ Metrics và traces không nói được *vì sao* một truy vấn chậm. Bật
 | CH-5 | Tắt Redis khi đang bán | Bán bình thường, chỉ chậm hơn |
 | CH-6 | Ngắt mạng 10 cửa hàng rồi nối lại **cùng lúc** | Trung tâm không sập; rate limit hoạt động; mọi sự kiện tới đủ |
 | CH-7 | Gửi lặp cùng một lô sự kiện 10 lần | Điểm cộng đúng một lần |
+
+> ✅ **2026-09-25: cả 7 đạt** trên compose (`tests/scenarios/test_chaos.py`), số đo ở
+> [progress](progress/2026-09-25-giai-doan-b-chung-minh.md) §4. CH-4 làm đầy một volume tmpfs 512 MB
+> của cửa hàng thử (`infra/chaos/disk.compose.yaml`) chứ không đụng đĩa thật; CH-6 dùng 10 cửa hàng
+> ảo (docs/18 §3) thay 10 stack thật (10 × 230 MB).
 
 ### 6.2. Test ngâm (soak) — Must
 

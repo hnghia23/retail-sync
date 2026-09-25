@@ -55,12 +55,15 @@ tests/
 │   ├── test_simulator_virtual.py # ✅ cửa hàng ảo + 3 tật trên Central API thật → CONVERGED; đối chứng mất đơn
 │   ├── test_simulator_edge.py   # ✅ bộ giả lập vào Edge API thật → worker → Central thật → pipeline → dbt → audit:
 │   │                            #    L0 = L1 = L2 = L3 = L4; mất đơn ở trung tâm / bronze / mart → DIVERGED
-│   └── test_bulk_schema.py      # ⏳ B: schema Parquet của bulk == schema bước trích xuất ghi ra
+│   ├── test_bulk_schema.py      # ✅ B: schema Parquet của bulk == schema bước trích xuất ghi ra
+│   └── test_partition_clock.py  # ✅ B: libfaketime — 14 lần sang tháng, partition tự tồn tại
 └── scenarios/                # end-to-end trên compose thật, NGUỒN DỮ LIỆU = BỘ GIẢ LẬP
     ├── conftest.py               # ✅ OPT-IN (RETAIL_SYNC_SCENARIOS=1, `make test-scenarios`): đổi trạng thái compose
     ├── test_at.py                # ✅ AT-01..04 (A) · AT-06 (A-Should) · AT-05, 09 (C)
-    ├── test_chaos.py              # ⏳ CH-1 .. CH-7 (B)
-    ├── test_load.py               # ⏳ LD-1 .. LD-4 (B) — chạy bộ giả lập, đọc báo cáo p95 của nó
+    ├── harness.py                 # ✅ công cụ chung: gây sự cố bằng docker, lịch viết tay, Grafana
+    ├── test_chaos.py              # ✅ CH-1 .. CH-7 (B) — OPT-IN RETAIL_SYNC_CHAOS=1, cả 7 đạt 2026-09-25
+    ├── test_alert_drills.py       # ✅ diễn tập từng cảnh báo bằng điều kiện thật (B) — RETAIL_SYNC_ALERT_DRILLS=1
+    ├── test_load.py               # 🟡 LD-1, LD-2, LD-4, overhead OTel (B) — RETAIL_SYNC_LOAD=1; LD-3 đọc báo cáo infra/loadtest/
     ├── test_soak.py               # ⏳ test ngâm 72h (B) — `audit` định kỳ, không bao giờ DIVERGED
     └── test_data_integrity.py     # ✅ AT-07, AT-10, DI-1..3 · DI-4/5 = một lần `simulator audit` (17 §5)
 ```
@@ -88,13 +91,13 @@ bản thì cộng thêm tiêu chí của nó (p95, thời gian hội tụ...).
 
 | # | File · hàm | Công cụ |
 |---|---|---|
-| CH-1 | `test_chaos.py::test_network_disconnect_30min` | `docker network disconnect`/`connect` |
-| CH-2 | `test_chaos.py::test_kill_app_mid_commit_x20` | `docker kill -s SIGKILL`, lặp trong loop |
-| CH-3 | `test_chaos.py::test_kill_postgres_edge` | `docker kill`, kiểm tra WAL recovery |
-| CH-4 | `test_chaos.py::test_disk_95_percent` | `fallocate` file giả lập, hoặc volume nhỏ |
-| CH-5 | `test_chaos.py::test_redis_down` | `docker stop edge-cache` |
-| CH-6 | `test_chaos.py::test_ten_stores_reconnect_simultaneously` | 10× edge container, đồng loạt `network connect` |
-| CH-7 | `test_chaos.py::test_resend_batch_ten_times` | gọi lại `POST /events` cùng payload |
+| CH-1 | `test_chaos.py::test_ch1_network_disconnect_30min` | `docker network disconnect`/`connect --alias central-api` |
+| CH-2 | `test_chaos.py::test_ch2_kill_app_mid_commit_x20` | `docker kill -s SIGKILL`, lặp trong loop |
+| CH-3 | `test_chaos.py::test_ch3_kill_postgres_edge` | `docker kill`, kiểm tra WAL recovery |
+| CH-4 | `test_chaos.py::test_ch4_disk_95_percent` | volume tmpfs 512 MB của cửa hàng thử + `fallocate` (không đụng đĩa thật) |
+| CH-5 | `test_chaos.py::test_ch5_redis_down` | `docker stop edge-cache` |
+| CH-6 | `test_chaos.py::test_ch6_ten_stores_reconnect_simultaneously` | 10 cửa hàng ẢO (docs/18 §3) cùng offline rồi cùng nối lại — 10 stack thật không vừa RAM |
+| CH-7 | `test_chaos.py::test_ch7_resend_batch_ten_times` (+ `..._virtual_stores_...`) | gọi lại `POST /events` cùng payload; tật `resend` với `resend_times=10` |
 
 ## 4. Kịch bản tải (LD) → bộ giả lập
 

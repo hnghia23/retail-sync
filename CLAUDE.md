@@ -16,8 +16,11 @@ compose**. **🚪 Cổng A ĐẠT (2026-09-24)**, cả 8 điều kiện kiểm t
 [nhật ký](docs/progress/2026-09-25-giai-doan-b-dashboard.md)), ✅ job CI `scenarios` +
 `infra/bootstrap.py` ([nhật ký](docs/progress/2026-09-25-giai-doan-b-ci.md)), ✅ vá vận hành: lịch
 partition + INV-4, dọn outbox, log JSON, 15 cảnh báo, backup cửa hàng
-([nhật ký](docs/progress/2026-09-25-giai-doan-b-van-hanh.md)). Test ngâm 72h **hoãn** (máy cần cho
-việc khác). Tiếp theo: test hỗn loạn CH-1…7 (kích hoạt thử cảnh báo cùng lúc).
+([nhật ký](docs/progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ **CH-1…CH-7 đều đạt**, 21 cảnh báo (16
+đã kích hoạt thử), partition "chỉnh đồng hồ", dữ liệu T2 đã sinh
+([nhật ký](docs/progress/2026-09-25-giai-doan-b-chung-minh.md) — **đọc §8 "điểm dừng"**). Chủ dự án
+muốn **xong B rồi mới chạy test ngâm 72h**. Còn: LD-1/2/4 + overhead OTel, LD-3, seam 50 triệu dòng
+ledger, 5 cảnh báo chưa kích hoạt, `restore` thật, `git clone` → README.
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 
@@ -82,9 +85,21 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
   ClickHouse đăng nhập bằng header.
 
 - **Việc có lịch ở trung tâm = `central-maintenance`** (partition `point_ledger` trước 3 tháng + đối
-  soát INV-4, mỗi giờ). Hàm tạo partition từng không được ai gọi — thêm việc định kỳ mới thì gắn vào
-  đây, đừng để nó chỉ nằm trong docstring. Backup cửa hàng: sidecar `edge-backup-*`, kiểm bằng
+  soát INV-4, mỗi giờ; quét TOÀN BỘ mỗi 30 ngày lúc 01–05 giờ — lệnh `--full` từng không ai gọi).
+  Hàm tạo partition từng không được ai gọi — thêm việc định kỳ mới thì gắn vào đây, đừng để nó chỉ
+  nằm trong docstring. Cảnh báo sinh bằng `infra/observability/build_alerts.py` (21 rule, webhook →
+  `alert-sink`), dashboard bằng `build_dashboard.py` — sửa script, đừng sửa tay JSON. Backup cửa hàng: sidecar `edge-backup-*`, kiểm bằng
   `infra/store_backup.py verify`. Log: `shared.logs.setup_logging()` (JSON + `trace_id`).
+
+- **Giai đoạn B (2026-09-25), đừng làm hỏng:** (1) lô RỖNG `POST /events` là **heartbeat** — worker
+  rảnh gửi mỗi 5 phút, trung tâm đặt `updated_at` và `lag_seconds = 0` (outbox trống = đã bắt kịp).
+  (2) Rate limit theo cửa hàng `429` (token bucket, trong bộ nhớ một tiến trình) kiểm TRƯỚC semaphore
+  `503`. (3) Trần backoff 240 s để CH-1 hội tụ < 5 phút. (4) dbt: fact đọc thẳng bronze, O(tháng)
+  (quy tắc ở [data_platform/README.md](data_platform/README.md)). (5) Bộ giả lập: `5xx` ở chốt đơn =
+  "không rõ kết cục". (6) `simulator bulk` ghi prefix `bronze/bulk-<profile>` + DB `dw_bulk`, KHÔNG BAO
+  GIỜ `bronze/central`. (7) Test hỗn loạn/diễn tập/tải OPT-IN (`RETAIL_SYNC_CHAOS|ALERT_DRILLS|LOAD=1`),
+  gây sự cố thật trên stack dev. `docker update --cpus 0` KHÔNG gỡ giới hạn CPU — đặt lại bằng số CPU
+  của máy ảo. (8) Webhook Grafana không có uid rule trong nhãn — `alert-sink` lấy từ `generatorURL`.
 
 **Sync worker — quy tắc không được phá:** mất mạng/401/503 là lỗi của ĐƯỜNG TRUYỀN, không bao
 giờ tăng `outbox.attempts`. Chỉ khi trung tâm xét và từ chối một sự kiện mới tính lượt thử.

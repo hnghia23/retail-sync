@@ -1,2 +1,4 @@
 # Script chạy trong container Linux: CRLF (autocrlf trên Windows) làm sh chết ở dòng đầu.
 *.sh text eol=lf
+**/Dockerfile text eol=lf
+*.Dockerfile text eol=lf

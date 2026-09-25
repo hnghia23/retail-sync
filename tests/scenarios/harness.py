@@ -227,6 +227,20 @@ async def wait_alert(uid: str, *, state: str = "firing", within: float = 900) ->
     return None
 
 
+def notified(uid: str, *, status: str = "firing") -> bool:
+    """`alert-sink` đã NHẬN thông báo `status` của rule `uid` chưa (theo uid, hoặc theo tiêu đề
+    với bản ghi cũ không có uid)."""
+    title_of = {v: k for k, v in alert_titles().items()}
+    text = httpx.get("http://localhost:8089/alerts", timeout=10).text
+    for line in text.splitlines():
+        row = json.loads(line)
+        if row.get("status") != status:
+            continue
+        if row.get("rule_uid") == uid or row.get("alertname") == title_of.get(uid):
+            return True
+    return False
+
+
 def observability_up() -> bool:
     try:
         return httpx.get(f"{GRAFANA}/api/health", timeout=3).status_code == 200

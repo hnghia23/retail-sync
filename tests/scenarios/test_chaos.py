@@ -52,6 +52,7 @@ from tests.scenarios.harness import (
     wait_alert,
     wait_up,
 )
+from tests.scenarios.harness import notified as notified_by_sink
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RETAIL_SYNC_CHAOS") != "1",
@@ -397,12 +398,7 @@ async def test_ch4_disk_95_percent(stack: Stack) -> None:
         manifest = await run_edge_plans(
             stack, "ch4", {_DISK: sales_plan(duration=40, sales=30, seed=4)}
         )
-        sink = (await asyncio.to_thread(_get, "http://localhost:8089/alerts")).text
-        notified = any(
-            json.loads(line).get("rule_uid") == "rs-store-disk"
-            and json.loads(line).get("status") == "firing"
-            for line in sink.splitlines()
-        )
+        notified = await asyncio.to_thread(notified_by_sink, "rs-store-disk")
         docker("exec", "-u", "root", db, "rm", "-f", "/var/lib/postgresql/ballast")
         resolved_after = await wait_alert("rs-store-disk", state="inactive", within=420)
         report(

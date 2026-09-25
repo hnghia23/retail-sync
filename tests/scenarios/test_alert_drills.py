@@ -16,7 +16,6 @@ Cần `--profile observability`. `test_drill_store_offline_70min` dài hơn mộ
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import subprocess
 import uuid
@@ -41,27 +40,18 @@ from tests.scenarios.harness import (
     sales_plan,
     wait_alert,
 )
+from tests.scenarios.harness import notified as notified_by_sink
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RETAIL_SYNC_ALERT_DRILLS") != "1" or not observability_up(),
     reason="diễn tập cảnh báo là opt-in: RETAIL_SYNC_ALERT_DRILLS=1 + --profile observability",
 )
 
-SINK = "http://localhost:8089/alerts"
-
-
-def _notified(uid: str) -> bool:
-    text = httpx.get(SINK, timeout=10).text
-    return any(
-        (row := json.loads(line)).get("rule_uid") == uid and row.get("status") == "firing"
-        for line in text.splitlines()
-    )
-
 
 async def _expect(uid: str, *, within: float) -> dict[str, Any]:
     fired = await wait_alert(uid, within=within)
     await asyncio.sleep(20)  # group_wait 10 s của contact point
-    notified = await asyncio.to_thread(_notified, uid)
+    notified = await asyncio.to_thread(notified_by_sink, uid)
     return {"uid": uid, "fired_after_seconds": fired, "notified": notified}
 
 
@@ -87,6 +77,13 @@ def _psql(stack: Stack, sql: str) -> str:
         "exec", container_of("central-db"), "psql", "-U", e.get("CENTRAL_DB_USER", "central_app"),
         "-d", "central", "-Atc", sql,
     )  # fmt: skip
+
+
+def _unthrottle(name: str) -> None:
+    """Gỡ giới hạn CPU. `docker update --cpus 0` KHÔNG gỡ (giữ nguyên giới hạn cũ — lần diễn tập
+    đầu để DB store-002 bị bóp 5% CPU sau khi xong): đặt bằng đúng số CPU của máy ảo Docker."""
+    ncpu = docker("info", "--format", "{{.NCPU}}").strip() or "8"
+    docker("update", "--cpus", ncpu, name)
 
 
 def _assert_all(results: list[dict[str, Any]]) -> None:
@@ -287,7 +284,7 @@ async def test_drill_slow_store_database(stack: Stack) -> None:
             await _expect("rs-sales-p95", within=900),
         ]
     finally:
-        docker("update", "--cpus", "0", db)
+        _unthrottle(db)
     manifest = await run
     summary = {
         "results": results,
@@ -320,7 +317,7 @@ async def test_drill_slow_central_database(stack: Stack) -> None:
             await _expect("rs-ingest-p95", within=1200),
         ]
     finally:
-        docker("update", "--cpus", "0", db)
+        _unthrottle(db)
     code = await run
     report("alerts", "drill-slow-central", {"results": results, "simulator_exit": code})
     _assert_all(results)

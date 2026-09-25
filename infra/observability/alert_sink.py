@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,14 @@ from threading import Lock
 
 LOG = Path(os.environ.get("ALERT_SINK_FILE", "/data/alerts.jsonl"))
 _lock = Lock()
+
+
+_UID = re.compile(r"/alerting/grafana/([^/]+)/view")
+
+
+def _rule_uid(url: str) -> str | None:
+    match = _UID.search(url)
+    return match.group(1) if match else None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -39,7 +48,9 @@ class Handler(BaseHTTPRequestHandler):
                 "received_at": received,
                 "status": alert.get("status"),
                 "alertname": alert.get("labels", {}).get("alertname"),
-                "rule_uid": alert.get("labels", {}).get("__alert_rule_uid__"),
+                # Webhook của Grafana không mang uid của rule trong nhãn; nó nằm trong
+                # `generatorURL` (…/alerting/grafana/<uid>/view).
+                "rule_uid": _rule_uid(alert.get("generatorURL") or ""),
                 "severity": alert.get("labels", {}).get("severity"),
                 "starts_at": alert.get("startsAt"),
                 "ends_at": alert.get("endsAt"),

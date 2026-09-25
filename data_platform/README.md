@@ -14,11 +14,22 @@ Chạy dbt từ máy dev: `make dbt-build` (uvx, không cài dbt vào môi trư�
 `CLICKHOUSE_PASSWORD`). Trong compose: `make up-data`, UI Airflow ở http://localhost:8081,
 `make dag-run` để chạy ngay. Test S6 trên ClickHouse thật: `tests/integration/test_dbt_marts.py`.
 
-Ba quy tắc khi thêm model (lý do ở [docs/17 §4 bẫy 5](../docs/17-data-flow.md)):
-1. Fact tăng dần = `insert_overwrite` + `affected_months()` + `pipeline_cutoff()`, không tự
+Năm quy tắc khi thêm model (lý do ở [docs/17 §4 bẫy 5](../docs/17-data-flow.md) và
+[macros/incremental.sql](dbt/macros/incremental.sql)):
+1. Fact tăng dần = `insert_overwrite` + `affected_month_list()` + `pipeline_cutoff()`, không tự
    tính mép cắt.
-2. Staging của bảng incremental lọc `recorded_at < loaded_until()`.
-3. ClickHouse cho alias nhìn thấy trong `WHERE`: `f(x) AS x ... WHERE x ...` là kiểm alias,
+2. **Một lượt phải tốn O(tháng bị ảnh hưởng), không O(lịch sử)** (2026-09-25): fact đọc THẲNG
+   bronze qua `latest_sales()` / `month_filter()` / `child_dt_filter()` — điều kiện tháng đẩy xuống
+   TRƯỚC khi khử trùng, phân vùng `_dt` cắt theo nhật ký nạp. KHÔNG `ref('stg_sale')` trong model
+   chạy mỗi giờ: view đó khử trùng cả lịch sử (ở T2 là 79 triệu đơn), và ClickHouse không đẩy
+   điều kiện qua `LIMIT BY`. Dim lấy tập khóa "đã thấy" bằng `DISTINCT` một cột ở bronze.
+3. Staging của bảng incremental lọc `recorded_at < loaded_until()` (staging còn cho truy vấn tay
+   và test, không cho fact).
+4. Test trên fact lọc `occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})`
+   — DAG chạy test MỖI GIỜ. Toàn bộ lịch sử: `dbt test --vars '{test_window_days: 36500}'`.
+   Dùng `now64`/`toDate32`: `now() - 36500 ngày` TRÀN kiểu `DateTime` (ra năm 2062) và test xanh mà
+   không kiểm gì. Dựng lại một khoảng: `--vars '{rebuild_months: [202501, 202502]}'`.
+5. ClickHouse cho alias nhìn thấy trong `WHERE`: `f(x) AS x ... WHERE x ...` là kiểm alias,
    không kiểm cột. Lọc trong subquery trước (đã gặp: NULL lọt qua thành UUID 0).
 
 **Code trích xuất (S4) và nạp (S5) nằm ở [`packages/pipeline/`](../packages/pipeline/)**, không
