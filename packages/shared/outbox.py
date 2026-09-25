@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 
-from shared.events import SCHEMA_VERSION, EventType
+from shared.events import EventType, build_envelope
 from shared.tracing import inject_trace
 from shared.types import new_event_id, utcnow
 
@@ -51,16 +51,15 @@ async def enqueue_event(
     import json
 
     eid = event_id or new_event_id()
-    envelope = {
-        "event_id": str(eid),
-        "event_type": event_type,
-        "schema_version": SCHEMA_VERSION,
-        "store_id": store_id,
-        "occurred_at": (occurred_at or utcnow()).isoformat(),
-        "payload": payload.model_dump(mode="json"),
+    envelope = build_envelope(
+        event_id=eid,
+        event_type=event_type,
+        store_id=store_id,
+        occurred_at=occurred_at or utcnow(),
+        payload=payload,
         # Ràng buộc #7 — traceparent đi cùng payload, không đi cùng HTTP header
-        "trace": inject_trace(),
-    }
+        trace=inject_trace(),
+    )
     await session.execute(
         _INSERT,
         {"event_id": eid, "event_type": event_type, "payload": json.dumps(envelope)},

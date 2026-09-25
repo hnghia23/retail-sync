@@ -1,0 +1,21 @@
+version: 2
+
+# Bronze do packages/pipeline nạp (DDL: packages/pipeline/ddl/bronze.sql). dbt chỉ ĐỌC.
+sources:
+  - name: bronze
+    schema: "{{ env_var('CLICKHOUSE_DB', 'dw') }}"
+    tables:
+      - name: bronze_sale
+      - name: bronze_sale_line
+      - name: bronze_sale_payment
+      - name: bronze_point_ledger
+      - name: bronze_shift
+      - name: bronze_customer
+      - name: bronze_point_balance
+      - name: bronze_region
+      - name: bronze_store
+      - name: bronze_category
+      - name: bronze_product
+      - name: bronze_employee
+      - name: bronze_tier_rule
+      - name: bronze_load_log

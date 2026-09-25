@@ -25,6 +25,15 @@ s3://lake/silver/<thực thể>/dt=YYYY-MM-DD/*.parquet                      (s�
 clickhouse://dw/{dim_*, fact_*}                                          (gold, star schema)
 ```
 
+> 📝 **Đính chính 2026-09-23** (không đổi quyết định lake + ClickHouse + dbt, chỉ đổi bố cục).
+> Chi tiết và lý do ở [17-data-flow §2](../17-data-flow.md):
+> - Nguồn duy nhất là **Postgres trung tâm**, và **bỏ cấp `store_id=`**. Đường dẫn là
+>   `s3://lake/bronze/central/<bảng>/dt=<ngày nạp>/<start>_<end>.parquet`. Ở T3, chia theo
+>   cửa hàng sẽ sinh ~2000 file nhỏ mỗi cửa sổ trích xuất, vừa chậm đọc vừa không phục vụ
+>   truy vấn nào (ClickHouse lọc theo `dt`, còn `store_id` là cột trong file).
+> - **Silver trong POC là tầng staging của dbt bên trong ClickHouse**, không phải Parquet trên
+>   MinIO. Silver dạng Parquet để v2, khi có consumer thứ hai ngoài ClickHouse.
+
 ## Vì sao cần lake, không nạp thẳng vào warehouse?
 
 Đây là câu hỏi hợp lý — nó thêm một chặng. Ba lý do:
@@ -131,6 +140,16 @@ Thiết kế chốt:
 3. `ReplacingMergeTree` làm lưới an toàn cuối
 4. Test AT-07 đếm bằng `FINAL` **và** kiểm tra `system.parts` để không bị merge che mắt
 
+> **Cập nhật 2026-09-24 (hiện thực S5, S6):** hai điểm của thiết kế trên đổi theo bằng chứng.
+> (a) Token không phải `<bảng>:<ngày>:<store_id>` mà là **đường dẫn file + SHA-256 nội dung**:
+> cùng token khác nội dung thì ClickHouse bỏ lần sau mà không báo gì
+> ([17 §4 bẫy 4](../17-data-flow.md)). (b) **Mart không dùng `ReplacingMergeTree`**: fact được
+> dựng lại trọn phân vùng tháng (`insert_overwrite`, cơ chế 2), nên lưới an toàn số 3 không
+> còn việc gì để làm. Tệ hơn, nó sẽ **che** nhân đôi (sau merge, `count()` lại đúng) khỏi
+> bộ đối soát L4, vốn phải đếm được nhân đôi. Có bộ đối soát rồi thì một lớp che còn tệ hơn
+> không có gì. AT-07 kiểm bằng tên part trong `system.parts`: chạy lại không có dòng mới thì
+> không part nào đổi. Bronze vẫn là `MergeTree` + token + cửa sổ khử trùng.
+
 ## Ghi chú thiết kế warehouse
 
 Rút kinh nghiệm từ lỗi của v1:
@@ -156,6 +175,18 @@ hình ledger ([ADR-002](002-point-ledger.md)) làm cho phần phân tích loyalt
 - ClickHouse đọc Parquet trực tiếp → pipeline ít code
 - Mọi thành phần đều có bản managed tương ứng
 - Không cần di trú engine khi lên T2/T3
+
+### Rủi ro nguồn cung — MinIO *(bổ sung 2026-09-24)*
+
+Repo Docker Hub `minio/minio` **không còn tồn tại** (pull trả "repository does not exist",
+phát hiện 2026-09-24 khi chạy test). MinIO chỉ còn phát hành image qua `quay.io/minio/minio`.
+Compose và test đã chuyển sang `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z` và **ghim
+phiên bản**, vì `latest` của một nguồn vừa đổi chính sách phát hành là thứ không nên tin.
+
+Không đổi quyết định lake: pipeline chỉ nói giao thức S3 qua `pyarrow.fs.S3FileSystem` và hàm
+`s3()` của ClickHouse, nên thay MinIO bằng một kho tương thích S3 khác (SeaweedFS, Garage, hoặc
+S3/GCS thật ở production) là đổi image và endpoint, không đổi code. **Điều kiện xem lại:**
+quay.io cũng ngừng phát hành, hoặc cần bản vá bảo mật mà không còn image.
 
 ### Tiêu cực
 - Thêm một chặng (lake) so với nạp thẳng

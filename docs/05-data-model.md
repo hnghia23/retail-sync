@@ -217,10 +217,29 @@ employee(employee_id PK, store_id, name, role, password_hash,
 
 ```sql
 customer(customer_id uuid PK DEFAULT uuidv7(),
-         phone_hash text UNIQUE, phone_enc bytea, name_enc bytea,
+         phone_hash text,               -- index thường, KHÔNG UNIQUE — xem ghi chú
+         phone_enc bytea, name_enc bytea,
          joined_at, status,
-         merged_into uuid)              -- C03: gộp khách trùng
+         merged_into uuid,              -- C03: gộp khách trùng
+         recorded_at timestamptz)       -- watermark trích xuất — trigger set ở MỌI INSERT/UPDATE
 ```
+
+> ✅ **`recorded_at` thêm ở migration `0004_central_extract_watermarks`** ([17 §4](17-data-flow.md)
+> bẫy 3). `CustomerUpdated` sửa dòng tại chỗ, và trước đây bảng không có cột nào ghi lúc dòng
+> đổi, nên trích xuất tăng dần không thấy bản cập nhật. Cột được **trigger** đặt bằng `now()` ở
+> mọi `INSERT`/`UPDATE`, không phụ thuộc handler. Cùng trigger cũng gắn cho `sale_replica`,
+> `shift_replica` (`recorded_at`) và `point_balance` (`updated_at`).
+
+> **`joined_at`** = `occurred_at` của `CustomerCreated`, tức lúc đăng ký tại cửa hàng (sửa
+> 2026-09-23). Bản đầu để `DEFAULT now()`, nên cửa hàng offline 3 ngày làm ngày gia nhập của
+> khách lệch 3 ngày trong `dim_customer`.
+
+> ⚠️ **`phone_hash` ở trung tâm không UNIQUE** (đổi ở migration `0003_central_ingest`,
+> 2026-09-23). Bản đầu có UNIQUE, và nó làm chính case C03 không thể ghi nhận: khách thứ hai
+> (tạo ở cửa hàng khác lúc offline) không vào được bảng, nên mọi `PointsEarned` của khách đó
+> vỡ khóa ngoại — điểm thật mất khỏi trung tâm. Giờ cả hai bản ghi tồn tại, cặp trùng vào
+> `customer_duplicate_candidate` để gộp thủ công. Phía **cửa hàng** giữ UNIQUE trên
+> `customer_local.phone_hash`: trong một cửa hàng, một SĐT đúng là một khách.
 
 ### 4.3. Sổ cái điểm — nguồn sự thật ([ADR-002](adr/002-point-ledger.md))
 
@@ -254,10 +273,25 @@ CREATE TABLE point_balance (             -- snapshot, dựng lại được từ
 > có UNIQUE toàn cục ([doc 12 §5](12-event-schema.md)) — còn `point_ledger` chỉ được ghi
 > *sau khi* `claim_event()` trả về true.
 
+> ✅ **Index `point_ledger_recorded_idx` trên `recorded_at`** (migration `0004`, [17 §4](17-data-flow.md)
+> bẫy 2). Bảng phân vùng theo `occurred_at`, còn trích xuất bronze lọc theo `recorded_at`, nên
+> không có index thì mỗi lần trích xuất quét mọi partition. Index trên bảng cha tự áp cho mọi
+> partition, kể cả partition `ensure_point_ledger_partitions()` tạo sau này.
+>
+> Trích xuất tăng dần lấy mép cửa sổ bằng hàm **`extract_horizon()`** (cùng migration): mốc là
+> transaction đang mở cũ nhất, để dòng commit muộn không lọt (bẫy 1).
+
 > ⚠️ **Partition phải được tạo tự động trước 3 tháng.** Postgres không tự tạo partition tương
 > lai — hết partition = **mọi INSERT lỗi** = toàn hệ thống điểm chết. Dùng `pg_partman` hoặc
 > job, kèm kiểm tra hằng ngày. Đây là rủi ro sập cao nhất của thiết kế
 > ([08 §4.1](08-reliability-and-scale.md)).
+>
+> ✅ **Và cả THÁNG TRƯỚC** (migration `0006`, 2026-09-24). Cửa hàng offline vắt qua cuối tháng,
+> đồng bộ ngày 1 → điểm của tháng trước cần partition tháng trước. Khi hệ thống đã chạy vài
+> tháng thì nó có sẵn; ở **tháng go-live và mọi môi trường mới** thì không, và trung tâm từ
+> chối KHÔNG thử lại (23514) → điểm vào dead-letter, đơn thì vẫn vào. Phát hiện bằng bộ giả lập
+> `virtual`. `ensure_point_ledger_partitions(months_ahead, months_back = 1)`; lùi xa hơn vẫn từ
+> chối ồn ào (đồng hồ sai / dữ liệu quá cũ).
 
 ### 4.4. Bản sao giao dịch & bảng vận hành
 
@@ -265,8 +299,14 @@ CREATE TABLE point_balance (             -- snapshot, dựng lại được từ
 sale_replica, sale_line_replica, sale_payment_replica, shift_replica   -- cùng hình dạng
 store_sync_status(store_id PK, last_event_at, lag_seconds, status)
 processed_event(event_id uuid PK, received_at)    -- chốt chặn idempotency
+dead_letter_event(event_id PK, store_id, event_type, schema_version, payload, error)
 customer_duplicate_candidate(phone_hash, customer_ids uuid[], detected_at)  -- C03
+store_credential(store_id PK → store, key_sha256 UNIQUE, created_at, revoked_at)  -- docs/13 §2
 ```
+
+`store_credential` lưu SHA-256 của khóa, không phải Argon2: khóa là 32 byte ngẫu nhiên do máy
+sinh (không có không gian đoán cần làm chậm), và Argon2 tốn ~50ms mỗi lần kiểm — gần hết
+ngân sách 300ms của route tra cứu.
 
 ---
 
@@ -308,7 +348,7 @@ class ReturnRules(BaseSettings):
 | INV-1 | `sale.subtotal = total + discount_tier + discount_promo` | `CHECK` constraint |
 | INV-2 | `SUM(sale_payment.amount) = sale.total` | **Trigger** (liên dòng, `CHECK` không làm được) + kiểm tra DI-3 |
 | INV-3 | `SUM(sale_line.line_total) = sale.subtotal` | Trigger + DI-2 |
-| INV-4 | `point_balance.balance = SUM(point_ledger.delta)` | **Job đối soát tăng dần** (AT-10, DI-1) |
+| INV-4 | `point_balance.balance = SUM(point_ledger.delta)` | **Job đối soát tăng dần** `central.ops.reconcile` (AT-10, DI-1). Lệch lưu ở `reconciliation_drift` tới khi được sửa; `--full` hằng tháng |
 | INV-5 | Số lượng trả ≤ số lượng đã mua của dòng gốc | Kiểm tra ở use case + job rà soát |
 | INV-6 | Mọi `sale` ở cửa hàng có mặt ở trung tâm sau ≤ 1 giờ | Job kiểm tra (DI-5) |
 
@@ -345,25 +385,26 @@ fact_sale_line(
     employee_key, customer_key, product_key, promotion_key,
     sale_id, line_no,
     quantity, unit_price, line_total, discount_allocated,
+    net_amount,                       -- line_total − discount_allocated; Σ theo đơn = total
     is_return UInt8,                  -- 🆕 phân biệt bán / trả
-    occurred_at
-) ENGINE = ReplacingMergeTree
+    sale_status, occurred_at, _recorded_at
+) ENGINE = MergeTree                  -- thay trọn phân vùng (insert_overwrite), xem dưới
   PARTITION BY toYYYYMM(occurred_at)
   ORDER BY (store_key, date_key, sale_id, line_no);
 
 -- 🆕 BẢNG RIÊNG cho thanh toán — KHÔNG gộp vào fact_sale_line
 fact_payment(
     date_key, business_date, store_key, shift_key,
-    sale_id, seq, method, amount, occurred_at
-) ENGINE = ReplacingMergeTree
+    sale_id, seq, method, amount, sale_status, occurred_at, _recorded_at
+) ENGINE = MergeTree
   PARTITION BY toYYYYMM(occurred_at)
   ORDER BY (store_key, date_key, sale_id, seq);
 
 -- Ánh xạ gần 1-1 từ point_ledger
 fact_point_event(
     date_key, store_key, customer_key,
-    event_id, delta, reason, occurred_at
-) ENGINE = ReplacingMergeTree
+    event_id, sale_id, delta, reason, occurred_at, _recorded_at
+) ENGINE = MergeTree
   PARTITION BY toYYYYMM(occurred_at)
   ORDER BY (customer_key, date_key, event_id);
 ```
@@ -378,7 +419,7 @@ fact_point_event(
 |---|---|
 | Fact mức đơn hàng, pivot wide `product_id_1..N` | Fact **mức dòng sản phẩm**, giữ dạng long |
 | `product_key String` vs `dim_product.product_key UInt32` | Kiểu surrogate key thống nhất + test `relationships` |
-| `MergeTree` thuần → chạy lại là nhân đôi | `insert_deduplication_token` + thay trọn phân vùng; `ReplacingMergeTree` chỉ là lưới an toàn |
+| `MergeTree` thuần → chạy lại là nhân đôi | Bronze: `insert_deduplication_token`. Mart: thay trọn phân vùng tháng bị ảnh hưởng (`insert_overwrite`). **Không** `ReplacingMergeTree` ở mart: nó che nhân đôi khỏi bộ đối soát L4 |
 | Dimension không bao giờ được nạp | Mỗi dim là một dbt model có test |
 | Không có nguồn cho fact điểm | `fact_point_event` ← `point_ledger` |
 | Không có khái niệm ca làm việc | `dim_shift` + `shift_key` |
@@ -418,11 +459,29 @@ PII ở hệ vận hành đều ghi nhật ký (NFR-06). **Không đưa PII vào
 | Khuyến mãi | `promotion` |
 
 ---
+*Changelog: 2026-09-24 (lần 2) — §4.3: partition `point_ledger` cho cả tháng trước (migration
+`0006`). §7: `dim_shift` có dòng inferred cho ca đang mở (ca chỉ lên trung tâm khi đóng; DAG giữa
+ngày làm test relationships đỏ — phát hiện trên compose với bộ giả lập `virtual`).*
+
+*Changelog: 2026-09-24 — §7 theo hiện thực dbt (`data_platform/dbt/`): fact dùng `MergeTree`
++ `insert_overwrite` thay vì `ReplacingMergeTree`. Phân vùng được thay trọn nên không cần
+lưới an toàn, và lưới đó sẽ che lỗi nhân đôi mà audit L4 phải thấy. Thêm `net_amount`,
+`sale_status`, `_recorded_at` (mốc tăng dần của bẫy 5), `sale_id` trong `fact_point_event`
+(để đối soát theo đơn). Khóa thay thế = `cityHash64` của khóa nghiệp vụ (tất định: dựng lại ra
+đúng khóa cũ), 0 = "không có". Dim có **inferred member** (`is_inferred = 1`) cho khóa thấy
+trong giao dịch mà master data chưa có: trung tâm nhận đơn không cần khóa ngoại, nên mart phải
+chịu được. Chưa có ở giai đoạn A: `dim_promotion`/`promotion_key` (khuyến mãi là C),
+`dim_date.is_holiday` (cần lịch lễ chính thức), SCD2, `phone_masked`/`name_masked` (không PII).*
+
 *Changelog: 2026-09-17 — sửa hai chi tiết phát hiện khi viết migration thật và chạy trên
 PostgreSQL 18.6: (a) `CHECK (total >= 0)` trên `sale` nới thành
 `status = 'RETURN' OR total >= 0` vì đơn trả hàng có số âm ở cả ba bảng; (b) `point_ledger`
 đổi sang `PRIMARY KEY (event_id, occurred_at)` — Postgres bắt buộc PK chứa cột phân vùng.
 Cả hai đã được kiểm chứng bằng test ở `tests/integration/`.*
+
+*Changelog: 2026-09-23 (lần 2) — migration `0004_central_extract_watermarks`: `customer.recorded_at`,
+index `point_ledger(recorded_at)`, trigger watermark trên 4 bảng, hàm `extract_horizon()`
+([17 §4](17-data-flow.md) bẫy 1–3).*
 
 *Changelog: 2026-09-11 — viết lại toàn bộ: gộp 8 lỗ hổng schema từ [business/](business/),
 thêm `dim_shift` + `fact_payment` cho warehouse, tách quy tắc nghiệp vụ thành dữ liệu vs cấu

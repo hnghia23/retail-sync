@@ -16,6 +16,8 @@ root_packages =
     shared
     edge
     central
+    simulator
+    pipeline
 include_external_packages = False
 
 # -- 1. `shared` must not know about application code ------------------------
@@ -103,3 +105,69 @@ forbidden_modules =
     edge.pos
     edge.loyalty
     edge.reporting
+
+# -- 7. The simulator is a CLIENT of the system under test (docs/18 sec 8) -----
+# It drives the edge over HTTP like a real till. If it imported edge/central code, a
+# test would prove the simulator, not the system. The audit reads Postgres directly --
+# that is the tester's privilege, not a shortcut into application code.
+# Virtual mode (docs/18 sec 3) is the one allowed exception, and only for PURE code:
+# edge.sync.client + edge.sync.backoff (so a virtual store pushes and backs off exactly
+# like the real worker) and edge.pos.domain / edge.loyalty.domain (pricing and points,
+# so a virtual store cannot compute a second, drifting price). Everything with a DB,
+# HTTP server, settings or use case stays forbidden.
+[importlinter:contract:simulator-is-a-client]
+name = simulator imports only pure edge code, never central
+type = forbidden
+source_modules =
+    simulator
+forbidden_modules =
+    central
+    edge.main
+    edge.settings
+    edge.health
+    edge.web
+    edge.ops
+    edge.reporting
+    edge.sync.worker
+    edge.pos.adapters
+    edge.pos.application
+    edge.loyalty.adapters
+    edge.loyalty.application
+    edge.loyalty.api
+
+[importlinter:contract:nothing-imports-simulator]
+name = shared, edge and central never import the simulator
+type = forbidden
+source_modules =
+    shared
+    edge
+    central
+forbidden_modules =
+    simulator
+
+# -- 8. The data pipeline (S4/S5, docs/17) is standalone --------------------------
+# It also runs inside the Airflow image, which has its own pinned dependency set
+# (data_platform/requirements.txt). Importing application code would drag FastAPI,
+# SQLAlchemy and pydantic-settings into that image. It reads central Postgres with SQL,
+# like any other analytical consumer.
+[importlinter:contract:pipeline-is-standalone]
+name = pipeline does not import shared, edge, central or simulator
+type = forbidden
+source_modules =
+    pipeline
+forbidden_modules =
+    shared
+    edge
+    central
+    simulator
+
+[importlinter:contract:nothing-imports-pipeline]
+name = application code never imports the pipeline
+type = forbidden
+source_modules =
+    shared
+    edge
+    central
+    simulator
+forbidden_modules =
+    pipeline

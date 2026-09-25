@@ -1,0 +1,6 @@
+# dbt — cài vào VENV RIÊNG (/opt/airflow/dbt-venv trong image Airflow; uvx ở máy dev và trong test),
+# không cài chung môi trường với Airflow: dbt kéo theo protobuf/networkx/... với ràng buộc riêng,
+# trộn vào constraint của Airflow là vỡ một trong hai. Cosmos gọi dbt qua đường dẫn thực thi.
+# MỘT chỗ ghim phiên bản: Dockerfile, Makefile (`make dbt-build`) và tests/integration đều đọc file này.
+dbt-core==1.12.5
+dbt-clickhouse==1.10.3

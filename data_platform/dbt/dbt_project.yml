@@ -1,0 +1,26 @@
+# dbt — chặng S6 (docs/17 §2): bronze_* → staging (vai trò silver) → dim_* / fact_*.
+#
+# Chạy từ máy dev (không cần cài dbt vào môi trường của repo):
+#   make dbt-build          # uvx dbt build, trỏ vào ClickHouse của compose
+# Trong Airflow: mỗi model là một task (astronomer-cosmos), xem data_platform/airflow/dags/.
+name: retail_sync
+version: "0.1.0"
+config-version: 2
+profile: retail_sync
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+clean-targets: ["target", "logs"]
+
+vars:
+  # Giờ cửa hàng — cùng giá trị với STORE_UTC_OFFSET_MINUTES=420 ở edge. Chỉ dùng cho
+  # date_key của fact_point_event (sổ cái không có business_date).
+  store_timezone: "Asia/Ho_Chi_Minh"
+
+models:
+  retail_sync:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

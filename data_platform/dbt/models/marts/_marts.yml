@@ -1,0 +1,97 @@
+version: 2
+
+# Khóa 0 = "không có" (khách vãng lai, đơn không thuộc ca) — relationships bỏ qua.
+models:
+  - name: dim_date
+    columns:
+      - name: date_key
+        data_tests: [unique, not_null]
+  - name: dim_store
+    data_tests:
+      - no_inferred_members:
+          config: {severity: warn}
+    columns:
+      - name: store_key
+        data_tests: [unique, not_null]
+  - name: dim_product
+    data_tests:
+      - no_inferred_members:
+          config: {severity: warn}
+    columns:
+      - name: product_key
+        data_tests: [unique, not_null]
+  - name: dim_employee
+    data_tests:
+      - no_inferred_members:
+          config: {severity: warn}
+    columns:
+      - name: employee_key
+        data_tests: [unique, not_null]
+  - name: dim_customer
+    data_tests:
+      - no_inferred_members:
+          config: {severity: warn}
+    columns:
+      - name: customer_key
+        data_tests: [unique, not_null]
+  - name: dim_shift
+    columns:
+      - name: shift_key
+        data_tests: [unique, not_null]
+
+  - name: fact_sale_line
+    data_tests:
+      - unique_columns:
+          arguments:
+            columns: [sale_id, line_no]
+    columns:
+      - name: date_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_date'), field: date_key}
+      - name: store_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_store'), field: store_key}
+      - name: product_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_product'), field: product_key}
+      - name: employee_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_employee'), field: employee_key}
+      - name: customer_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_customer'), field: customer_key}
+              config: {where: "customer_key != 0"}
+      - name: shift_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_shift'), field: shift_key}
+              config: {where: "shift_key != 0"}
+
+  - name: fact_payment
+    data_tests:
+      - unique_columns:
+          arguments:
+            columns: [sale_id, seq]
+    columns:
+      - name: store_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_store'), field: store_key}
+      - name: method
+        data_tests:
+          - accepted_values:  # = shared/types.py PaymentMethod
+              arguments: {values: [CASH, CARD, EWALLET]}
+
+  - name: fact_point_event
+    columns:
+      - name: event_id
+        data_tests: [unique, not_null]
+      - name: customer_key
+        data_tests:
+          - relationships:
+              arguments: {to: ref('dim_customer'), field: customer_key}

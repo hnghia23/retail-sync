@@ -42,15 +42,28 @@ async def _insert_ledger(
 
 
 async def test_partitions_exist_three_months_ahead(central_db: Any) -> None:
-    """Migration phải tạo sẵn tháng hiện tại + 3 tháng tới.
+    """Migration phải tạo sẵn tháng trước + tháng hiện tại + 3 tháng tới.
 
     Postgres không tự tạo partition tương lai. Hết partition = MỌI insert điểm lỗi, và nó
     xảy ra đúng 00:00 ngày đầu tháng, lúc không ai trực (docs/08 §4.1).
     """
     await _seed(central_db)
     health = await central_db.fetchrow("SELECT * FROM point_ledger_partition_health")
-    assert health["partition_count"] == 4
+    assert health["partition_count"] == 5
     assert health["months_ahead"] == 3
+
+
+async def test_last_month_is_accepted_on_a_fresh_database(central_db: Any) -> None:
+    """Cửa hàng offline vắt qua cuối tháng, đồng bộ ngày 1: điểm của tháng trước phải vào được
+    NGAY ở tháng go-live (migration 0006, phát hiện bằng bộ giả lập `virtual`). Lùi hai tháng
+    thì vẫn từ chối ồn ào — đồng hồ sai hoặc dữ liệu quá cũ."""
+    import asyncpg
+
+    await _seed(central_db)
+    await _insert_ledger(central_db, months_offset=-1)
+    assert await central_db.fetchval("SELECT count(*) FROM point_ledger") == 1
+    with pytest.raises(asyncpg.CheckViolationError, match="no partition"):
+        await _insert_ledger(central_db, months_offset=-2)
 
 
 async def test_ledger_row_lands_in_month_partition(central_db: Any) -> None:

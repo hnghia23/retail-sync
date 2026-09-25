@@ -1,0 +1,30 @@
+# Build context của mọi image là gốc repo (infra/compose.yaml: `context: ../`).
+# Không có file này thì CẢ `infra/.env` (secret) và .venv (~250 MB) bị gửi vào builder mỗi lần
+# build — chỉ còn cách một dòng `COPY . .` là secret nằm trong image.
+
+# Secret
+**/.env
+!**/.env.example
+
+# Môi trường & cache
+.venv/
+**/__pycache__/
+**/*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+
+# Đầu ra sinh ra
+data_platform/dbt/target/
+data_platform/dbt/logs/
+data_platform/dbt/dbt_packages/
+runs/
+
+# Không image nào cần
+.git/
+docs/
+tests/
+store/
+central/
+main.ipynb

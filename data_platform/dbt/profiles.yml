@@ -1,0 +1,19 @@
+# Profile duy nhất, mọi giá trị từ biến môi trường — cùng tên biến với packages/pipeline.
+# Trong compose (Airflow): CLICKHOUSE_HOST=clickhouse. Từ máy dev: localhost (mặc định).
+retail_sync:
+  target: dev
+  outputs:
+    dev:
+      type: clickhouse
+      driver: http
+      host: "{{ env_var('CLICKHOUSE_HOST', 'localhost') }}"
+      port: "{{ env_var('CLICKHOUSE_PORT', '8123') | as_number }}"
+      user: "{{ env_var('CLICKHOUSE_USER', 'dw') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD') }}"
+      schema: "{{ env_var('CLICKHOUSE_DB', 'dw') }}"
+      secure: false
+      threads: 4
+      custom_settings:
+        # LEFT JOIN không khớp cho NULL như SQL chuẩn, thay vì giá trị mặc định ('' / 0) của
+        # ClickHouse — '' lẫn vào tên vùng hay tên danh mục là dữ liệu sai trông như đúng.
+        join_use_nulls: 1

@@ -203,6 +203,29 @@ class EventEnvelope(_Lenient):
         return model.model_validate(self.payload)
 
 
+def build_envelope(
+    *,
+    event_id: uuid.UUID,
+    event_type: EventType,
+    store_id: str,
+    occurred_at: datetime,
+    payload: BaseModel,
+    trace: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Envelope dạng JSON (docs/12 §2) — MỘT chỗ dựng cho cả outbox thật lẫn cửa hàng ảo của bộ
+    giả lập (docs/18 §3). Hai nơi tự dựng thì sẽ lệch nhau ở một field nào đó."""
+    return {
+        "event_id": str(event_id),
+        "event_type": event_type,
+        "schema_version": SCHEMA_VERSION,
+        "store_id": store_id,
+        "occurred_at": occurred_at.isoformat(),
+        "payload": payload.model_dump(mode="json"),
+        # Ràng buộc #7 — traceparent đi cùng payload, không đi cùng HTTP header
+        "trace": trace or {},
+    }
+
+
 class IngestResult(BaseModel):
     """Phản hồi `POST /events` — docs/13 §2.
 
@@ -215,8 +238,23 @@ class IngestResult(BaseModel):
 
 
 class RejectedEvent(BaseModel):
+    """Một sự kiện trung tâm không nhận.
+
+    `retryable` phân biệt hai loại lỗi mà worker phải xử lý NGƯỢC nhau:
+
+      - `False` — lỗi của chính sự kiện: sai `schema_version`, payload không hợp lệ, sai
+        `store_id`. Gửi lại bao nhiêu lần cũng ra cùng kết quả, nên worker chuyển thẳng vào
+        dead-letter thay vì đốt `max_attempts` lượt vô ích.
+      - `True` — lỗi của thời điểm: vi phạm khóa ngoại vì sự kiện phụ thuộc (`CustomerCreated`)
+        chưa tới, hoặc lỗi DB tạm thời. Gửi lại sau là đúng.
+
+    Mặc định `True` là hướng an toàn: trung tâm cũ chưa biết field này thì worker vẫn thử
+    lại, không vứt sự kiện (docs/12 §4 — thêm field optional không tăng `schema_version`).
+    """
+
     event_id: uuid.UUID
     reason: str
+    retryable: bool = True
 
 
 IngestResult.model_rebuild()
