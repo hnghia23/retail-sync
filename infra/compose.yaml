@@ -473,8 +473,24 @@ services:
       # Dashboard "sức khỏe luồng" (docs/17 §6) — file trong repo, provision lúc khởi động.
       - ./observability/grafana/provisioning/retail-sync.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/retail-sync.yaml:ro
       - ./observability/grafana/dashboards:/otel-lgtm/retail-sync-dashboards:ro
-      # Ngưỡng cảnh báo docs/08 §5 (15 rule) — hiện ở Grafana → Alerting, chưa có contact point.
+      # Ngưỡng cảnh báo docs/08 §5 (20 rule, sinh bằng observability/build_alerts.py) + contact point
+      # webhook → alert-sink bên dưới.
       - ./observability/grafana/provisioning/alerting/retail-sync.yaml:/otel-lgtm/grafana/conf/provisioning/alerting/retail-sync.yaml:ro
+
+  # Nơi NHẬN cảnh báo (contact point webhook của Grafana): ghi mọi thông báo — cả lúc hết kêu — ra
+  # `docker logs` và một file JSONL; `GET localhost:8089/alerts` cho test hỗn loạn kiểm "cảnh báo đã
+  # tới thật", không chỉ "rule đổi màu". Production thay bằng kênh trực (chat/email/điện thoại):
+  # chỉ đổi contact point, không đổi rule. Chỉ thư viện chuẩn — image app vì đã có Python.
+  alert-sink:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    command: ["python", "/sink/alert_sink.py"]
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      ALERT_SINK_FILE: /tmp/alerts.jsonl
+    volumes:
+      - ./observability/alert_sink.py:/sink/alert_sink.py:ro
+    ports: ["8089:8080"]
 
   # Bộ giám sát luồng (`python -m pipeline monitor`, packages/pipeline/monitor.py): đọc trạng thái
   # S3–S6 (Postgres trung tâm, lake, ClickHouse) mỗi 30 s, đẩy OTLP cho dashboard. Chỉ ĐỌC.
@@ -491,6 +507,9 @@ services:
       <<: *pipeline-env
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       FLOW_MONITOR_INTERVAL_SECONDS: ${FLOW_MONITOR_INTERVAL_SECONDS:-30}
+      # Cảnh báo "cửa hàng im lặng > 1 giờ" chỉ canh cửa hàng CÓ stack thật: cửa hàng ảo của bộ giả
+      # lập im lặng sau mỗi lần chạy là bình thường. Production: để trống = canh mọi cửa hàng.
+      FLOW_MONITOR_WATCH_STORES: ${FLOW_MONITOR_WATCH_STORES:-store-001,store-002,store-003}
 
 volumes:
   edge_db_store_001:

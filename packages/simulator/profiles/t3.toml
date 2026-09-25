@@ -1,0 +1,28 @@
+# T3 — Scale: 2000 cửa hàng × 800 đơn/ngày (docs/02 §1). Chỉ dùng với chế độ `virtual` (LD-2, LD-4,
+# CH-6) và `bulk` (LD-3, seam 50 triệu dòng ledger): không có stack cửa hàng thật nào chạy nổi
+# chừng đó cửa hàng trên một laptop (docs/18 §2).
+# Mọi con số là giả định (docs/18 §4) — chỉnh ở đây khi có dữ liệu thật, không sửa code.
+name = "t3"
+stores = 2000
+sales_per_store_day = 800
+open_hour = 7
+close_hour = 22
+# [giờ bắt đầu, giờ kết thúc (không gồm), tỉ lệ doanh số ngày] — hai đỉnh trưa/tối.
+peak_windows = [[11, 13, 0.25], [17, 20, 0.35]]
+weekend_factor = 1.3
+lines_extra_mean = 2.5
+zipf_s = 1.1
+price_rank_noise = 1.0
+qty_multi_share = 0.2
+qty_multi_max = 5
+identified_share = 0.6
+new_customer_share = 0.03
+shifts_per_day = 2
+opening_cash = 500000
+changeover_guard = 0.02
+
+[payment_mix]
+CASH = 0.70
+CARD = 0.20
+EWALLET = 0.05
+SPLIT = 0.05

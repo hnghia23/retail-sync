@@ -78,7 +78,15 @@ class SyncSettings(_EnvSettings):
 
     batch_size: int = 200
     poll_interval_seconds: float = 2.0
-    backoff_max_seconds: float = 300.0
+    # Trần của backoff khi mất đường truyền. Jitter toàn phần (`next_backoff`) nên lần ngủ cuối
+    # dài tối đa đúng bằng trần: có mạng lại thì worker thử lại muộn nhất sau chừng đó. NFR-04 /
+    # CH-1 đòi hội tụ < 5 phút sau khi nối lại — 300 giây (bản đầu) chạm đúng mép, không còn chỗ
+    # cho thời gian xả lô. 240 giây để lại 1 phút.
+    backoff_max_seconds: float = 240.0
+    # Rảnh bao lâu thì gửi một lô RỖNG làm heartbeat. Hai việc: trung tâm biết cửa hàng còn sống
+    # dù không bán gì (`store_last_seen_age_seconds`), và worker phát hiện mất kết nối ngay cả khi
+    # không có gì để gửi (`sync_consecutive_failures` — "circuit breaker" của docs/08 §5).
+    heartbeat_seconds: float = 300.0
     max_attempts_before_dead_letter: int = 10
     # Trần của MỘT lần gửi lô. Worker giữ khóa hàng (`FOR UPDATE`) trên lô trong lúc chờ,
     # nên đây cũng là thời gian tối đa các dòng đó bị khóa.

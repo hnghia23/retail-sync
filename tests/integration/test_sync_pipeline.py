@@ -575,3 +575,100 @@ async def test_reconciliation_finds_no_drift_after_real_ingest(
     )
     assert result.checked_customers == 1
     assert result.drifts == []
+
+
+# ═══════════════ CH-6 — rate limit theo cửa hàng, heartbeat (giai đoạn B) ═══════════════
+
+
+async def test_store_rate_limit_is_429_with_retry_after_and_spares_other_stores(
+    central: Central,
+) -> None:
+    """docs/08 §3.2 — MỘT cửa hàng xả tồn đọng không được chiếm hết lượt: nó nhận `429` +
+    `Retry-After`, cửa hàng khác vẫn gửi được. Với worker đó là lỗi đường truyền (không đốt lượt
+    thử), và nó ngủ đúng số giây trung tâm bảo."""
+    from central.ingest.ratelimit import StoreRateLimiter
+    from edge.sync.client import CentralUnavailableError
+
+    central.app.state.store_limiter = StoreRateLimiter(rate=0.5, burst=2)
+    busy, other = central.client(STORE_ID), central.client(OTHER_STORE_ID)
+    await busy.push([])
+    await busy.push([])
+    with pytest.raises(CentralUnavailableError) as refused:
+        await busy.push([])
+    assert refused.value.status_code == 429
+    assert refused.value.retry_after == 2  # (1 - 0 token) / 0.5 req/s, làm tròn lên
+    await other.push([])  # bucket riêng: cửa hàng khác không bị vạ lây
+
+
+async def test_empty_batch_is_a_heartbeat_that_marks_the_store_seen(
+    central: Central, edge: Any, edge_db: Any
+) -> None:
+    """Lô rỗng = cửa hàng còn sống (`store_last_seen_age_seconds`), không cần có đơn nào."""
+    await _sell(edge, await _seed_edge(edge_db))
+    await run_once(edge, central.client(), settings=SYNC)  # có dòng store_sync_status
+    # Lô cuối là một lô xả tồn đọng 2 giờ: trễ 7200 s. Heartbeat = outbox đã trống → trễ về 0.
+    await central.db.execute(
+        "UPDATE store_sync_status SET updated_at = now() - interval '3 hours',"
+        " lag_seconds = 7200, status = 'LAGGING' WHERE store_id = $1",
+        STORE_ID,
+    )
+    await central.client().push([])
+    age, lag, status = await central.db.fetchrow(
+        "SELECT EXTRACT(EPOCH FROM now() - updated_at), lag_seconds, status"
+        " FROM store_sync_status WHERE store_id = $1",
+        STORE_ID,
+    )
+    assert age < 60 and lag == 0 and status == "OK"
+
+
+async def test_idle_worker_detects_lost_central_through_heartbeat(edge: Any) -> None:
+    """Không có gì để gửi mà trung tâm mất: không có heartbeat thì worker không bao giờ biết, và
+    `sync_consecutive_failures` (circuit breaker, docs/08 §5) đứng ở 0 đúng lúc phải kêu."""
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+    from edge.sync.telemetry import SyncMetrics
+    from edge.sync.worker import run_forever
+
+    reader = InMemoryMetricReader()
+    metrics = SyncMetrics(STORE_ID, meter=MeterProvider(metric_readers=[reader]).get_meter("t"))
+    settings = SyncSettings(
+        _env_file=None, heartbeat_seconds=0, poll_interval_seconds=0.05, backoff_max_seconds=0.05
+    )
+    offline = HttpCentralClientFactory.unreachable()
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_forever(edge, offline, settings=settings, stop=stop, metrics=metrics)
+    )
+    await asyncio.sleep(0.6)
+    stop.set()
+    await task
+
+    data = reader.get_metrics_data()
+    assert data is not None
+    values = {
+        m.name: [p.value for p in m.data.data_points]
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for m in sm.metrics
+    }
+    assert max(values["sync_consecutive_failures"]) > 0
+    assert sum(values["sync_push_failures"]) > 0
+
+
+async def test_heartbeat_keeps_an_idle_store_seen(central: Central, edge: Any) -> None:
+    """Worker rảnh, trung tâm sống: heartbeat đi qua, không lỗi, không lô nào được "gửi"."""
+    from edge.sync.worker import heartbeat
+
+    report = await heartbeat(central.client())
+    assert report.heartbeat and report.transport_error is None and report.claimed == 0
+
+
+class HttpCentralClientFactory:
+    @staticmethod
+    def unreachable() -> Any:
+        from edge.sync.client import HttpCentralClient
+
+        return HttpCentralClient(
+            base_url="http://central-down", api_key="k", timeout_seconds=1, transport=_unreachable()
+        )

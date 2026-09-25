@@ -45,6 +45,9 @@ class PipelineConfig:
     window_seconds: int = 3600
     #: Cộng thêm vào `extract_horizon()` — chỉ che khe micro-giây (docs/17 §4 bẫy 1).
     safety_lag_seconds: float = 30.0
+    #: Bộ giám sát: cửa hàng mà cảnh báo "im lặng quá 1 giờ" canh. Rỗng = mọi cửa hàng
+    #: (production). `FLOW_MONITOR_WATCH_STORES=store-001,store-002`.
+    watch_stores: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> PipelineConfig:
@@ -64,6 +67,7 @@ class PipelineConfig:
                 secret_key=need("LAKE_SECRET_KEY"),
                 url_for_clickhouse=env.get("LAKE_URL_FOR_CLICKHOUSE", "http://minio:9000"),
                 bucket=env.get("LAKE_BUCKET", "lake"),
+                prefix=env.get("LAKE_PREFIX", "bronze/central"),
             ),
             clickhouse=ClickHouseConfig(
                 url=env.get("CLICKHOUSE_URL", "http://localhost:8123"),
@@ -73,4 +77,7 @@ class PipelineConfig:
             ),
             window_seconds=int(env.get("PIPELINE_WINDOW_SECONDS", "3600")),
             safety_lag_seconds=float(env.get("PIPELINE_SAFETY_LAG_SECONDS", "30")),
+            watch_stores=tuple(
+                s.strip() for s in env.get("FLOW_MONITOR_WATCH_STORES", "").split(",") if s.strip()
+            ),
         )

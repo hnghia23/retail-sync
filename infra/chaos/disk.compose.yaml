@@ -1,0 +1,54 @@
+# CH-4 (docs/08 §6.1) — "làm đầy đĩa tới 95%: cảnh báo phát ra TRƯỚC khi ghi lỗi".
+#
+# Không làm đầy đĩa thật: đĩa của máy ảo Docker là đĩa C: của laptop. Thay vào đó một cửa hàng
+# thử `store-disk` có Postgres nằm trên volume tmpfs NHỎ (512 MB), và Edge API của nó đo đúng volume
+# đó (`DISK_PATH`, metric `disk_used_ratio`) — như máy cửa hàng thật đo đĩa chứa dữ liệu của nó.
+# Volume tmpfs mất dữ liệu khi không còn container nào mount: cửa hàng này dùng xong là bỏ.
+#
+#   docker compose -f infra/compose.yaml -f infra/chaos/disk.compose.yaml --profile chaos-disk up -d
+#
+# Dùng bởi tests/scenarios/test_chaos.py::test_ch4_disk_95_percent (tự dựng rồi tự dọn).
+
+services:
+  edge-db-disk:
+    image: postgres:18
+    profiles: ["chaos-disk"]
+    environment:
+      POSTGRES_USER: ${EDGE_DB_USER:-edge_app}
+      POSTGRES_PASSWORD: ${EDGE_DB_PASSWORD:?bắt buộc đặt trong .env}
+      POSTGRES_DB: edge_store_disk
+    ports: ["5439:5432"]
+    volumes:
+      - edge_db_disk:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  edge-api-disk:
+    build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
+    profiles: ["chaos-disk"]
+    depends_on:
+      edge-db-disk: { condition: service_healthy }
+    environment:
+      STORE_ID: store-disk
+      DATABASE_URL: postgresql+asyncpg://${EDGE_DB_USER:-edge_app}:${EDGE_DB_PASSWORD}@edge-db-disk:5432/edge_store_disk
+      CENTRAL_API_URL: http://central-api:8000
+      PII_HASH_KEY: ${PII_HASH_KEY:-changeme-dev-pii-hash-key}
+      # Đĩa được đo = volume chứa dữ liệu Postgres của cửa hàng này (mount chỉ đọc bên dưới).
+      DISK_PATH: /store-disk
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+      OTEL_SERVICE_NAME: edge-api-store-disk
+    volumes:
+      - edge_db_disk:/store-disk:ro
+    ports: ["8009:8000"]
+
+volumes:
+  edge_db_disk:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=512m"

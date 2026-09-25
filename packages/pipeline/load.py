@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import io
 from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import pyarrow.parquet as pq
@@ -82,7 +83,16 @@ def load_file(ch: ClickHouse, lake: Lake, spec: TableSpec, key: str) -> Loaded:
     return Loaded(spec.name, key, rows)
 
 
-def load_pending(ch: ClickHouse, lake: Lake, spec: TableSpec) -> list[Loaded]:
-    """Nạp mọi file có trong lake mà nhật ký nạp chưa ghi — theo thứ tự thời gian."""
+def load_pending(
+    ch: ClickHouse, lake: Lake, spec: TableSpec, *, until: datetime | None = None
+) -> list[Loaded]:
+    """Nạp mọi file có trong lake mà nhật ký nạp chưa ghi — theo thứ tự thời gian.
+
+    `until`: chỉ file có mép cuối cửa sổ ≤ mốc này (file snapshot không có cửa sổ: luôn nạp).
+    Để nạp lịch sử dài (`simulator bulk`, LD-3) theo từng tháng như lịch production, thay vì
+    nuốt 24 tháng trong một lượt."""
     done = loaded_paths(ch, spec)
-    return [load_file(ch, lake, spec, key) for key in lake.list_table(spec.name) if key not in done]
+    keys = [key for key in lake.list_table(spec.name) if key not in done]
+    if until is not None:
+        keys = [k for k in keys if (w := parse_window(k)) is None or w.end <= until]
+    return [load_file(ch, lake, spec, key) for key in keys]

@@ -5,10 +5,18 @@
 -- Bẫy alias của ClickHouse: alias nhìn thấy được trong WHERE, nên
 -- `assumeNotNull(customer_id) AS customer_id ... WHERE customer_id IS NOT NULL` kiểm chính alias
 -- (không bao giờ NULL) → NULL lọt qua thành UUID toàn số 0. Lọc trong subquery trước.
+-- Tập "đã thấy trong giao dịch" đọc THẲNG một cột ở bronze (DISTINCT, bộ nhớ cỡ số khóa),
+-- không qua `stg_sale`: khử trùng toàn bộ lịch sử mỗi giờ chỉ để lấy một tập khóa là thứ LD-3
+-- (2026-09-25) cho thấy không chịu nổi ở T2. Khóa này không đổi giữa các phiên bản của đơn.
 WITH seen AS (
     SELECT assumeNotNull(customer_id) AS customer_id
-    FROM (SELECT customer_id FROM {{ ref('stg_sale') }} WHERE customer_id IS NOT NULL)
-    UNION DISTINCT SELECT customer_id FROM {{ ref('stg_point_ledger') }}
+    FROM (
+        SELECT DISTINCT customer_id FROM {{ source('bronze', 'bronze_sale') }}
+        WHERE customer_id IS NOT NULL AND recorded_at < {{ loaded_until() }}
+    )
+    UNION DISTINCT
+    SELECT DISTINCT customer_id FROM {{ source('bronze', 'bronze_point_ledger') }}
+    WHERE recorded_at < {{ loaded_until() }}
 )
 SELECT
     {{ sk('c.customer_id') }} AS customer_key,

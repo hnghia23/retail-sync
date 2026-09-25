@@ -47,6 +47,8 @@ class Quirks:
     resend: bool = False
     #: Tỉ lệ lô ĐÃ ĐƯỢC NHẬN bị gửi lại nguyên lô.
     resend_share: float = 0.1
+    #: Mỗi lô bị gửi lại bao nhiêu LẦN (CH-7: 10 lần — điểm vẫn cộng đúng một lần).
+    resend_times: int = 1
     concurrent_customer: bool = False
     #: Tỉ lệ đơn (của khách định danh cũ) ở mỗi cửa hàng được chuyển sang một khách của cửa
     #: hàng khác, xếp gần giờ một lần mua của khách đó ở cửa hàng nhà.

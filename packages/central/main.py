@@ -14,11 +14,12 @@ from typing import Any
 from fastapi import FastAPI, Request
 from sqlalchemy import text
 
+from central.ingest.ratelimit import StoreRateLimiter
 from central.ingest.router import router as ingest_router
 from central.settings import get_otel_settings, get_settings
 from shared.db import make_engine, make_session_factory
 from shared.logs import setup_logging
-from shared.metrics import setup_metrics
+from shared.metrics import get_meter, register_resource_gauges, setup_metrics
 from shared.tracing import instrument_clients, instrument_fastapi, setup_tracing
 
 
@@ -34,6 +35,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_factory = make_session_factory(engine)
     # Tạo TRONG lifespan, không ở mức module: semaphore gắn với event loop đang chạy.
     app.state.ingest_gate = asyncio.Semaphore(settings.ingest_max_concurrency)
+    app.state.store_limiter = StoreRateLimiter(
+        rate=settings.ingest_store_rate_per_second, burst=settings.ingest_store_burst
+    )
+    if get_otel_settings().enabled:
+        register_resource_gauges(
+            get_meter("central.resources"), engine=engine, attrs={"service": "central-api"}
+        )
     try:
         yield
     finally:

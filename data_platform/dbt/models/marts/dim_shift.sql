@@ -46,7 +46,11 @@ SELECT
 FROM (
     SELECT assumeNotNull(shift_id) AS shift_id, any(store_id) AS store_id,
            min(business_date) AS business_date
-    FROM (SELECT shift_id, store_id, business_date FROM {{ ref('stg_sale') }} WHERE shift_id IS NOT NULL)
+    -- Ca đang mở (chưa lên trung tâm) suy từ đơn — thẳng từ bronze, gom theo ca (xem dim_store).
+    FROM (
+        SELECT shift_id, store_id, business_date FROM {{ source('bronze', 'bronze_sale') }}
+        WHERE shift_id IS NOT NULL AND recorded_at < {{ loaded_until() }}
+    )
     GROUP BY shift_id
 )
 WHERE shift_id NOT IN (SELECT shift_id FROM {{ ref('stg_shift') }})

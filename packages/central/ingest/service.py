@@ -84,6 +84,20 @@ _SYNC_STATUS = text(
 )
 
 
+#: Heartbeat (lô rỗng): worker chỉ gửi nó khi outbox ĐÃ TRỐNG — cửa hàng không còn gì chưa tới
+#: trung tâm, nên trễ đồng bộ lúc này đúng là 0. Không đặt lại thì "trễ của lô cuối" (một lô xả
+#: tồn đọng nhiều giờ) nằm nguyên đó mãi dù cửa hàng đã bắt kịp, và cảnh báo `rs-store-lag` kêu
+#: vĩnh viễn (thấy ở compose 2026-09-25). Cửa hàng chưa từng gửi sự kiện nào thì chưa có dòng.
+_SEEN = text(
+    "UPDATE store_sync_status SET updated_at = now(), lag_seconds = 0, status = 'OK'"
+    " WHERE store_id = :store_id"
+)
+
+
+async def mark_seen(session: AsyncSession, *, store_id: str) -> None:
+    await session.execute(_SEEN, {"store_id": store_id})
+
+
 @dataclass(frozen=True, slots=True)
 class _Outcome:
     event_id: uuid.UUID | None

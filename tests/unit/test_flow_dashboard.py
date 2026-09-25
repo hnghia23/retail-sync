@@ -15,11 +15,13 @@ from pathlib import Path
 
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from edge.health import OutboxGauges, OutboxSnapshot
 from edge.sync.telemetry import SyncMetrics
 from edge.sync.worker import BatchReport
 from pipeline.monitor import METRICS as MONITOR_METRICS
+from shared.metrics import register_resource_gauges
 from simulator.telemetry import _GAUGES as AUDIT_GAUGES
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,7 +31,7 @@ INGEST = ROOT / "packages" / "central" / "ingest" / "telemetry.py"
 #: Từ khóa/hàm PromQL — không phải tên metric.
 _PROMQL = {
     "sum", "max", "min", "avg", "count", "by", "without", "rate", "irate", "increase", "clamp_min",
-    "histogram_quantile", "or", "and", "unless", "vector", "le", "on", "ignoring",
+    "histogram_quantile", "or", "and", "unless", "vector", "le", "on", "ignoring", "min_over_time",
 }  # fmt: skip
 
 
@@ -49,6 +51,8 @@ def _emitted() -> set[str]:
         BatchReport(claimed=3, sent=1, retry_scheduled=1, dead_lettered=1), consecutive_failures=0
     )
     SyncMetrics("s2", meter=meter).record(BatchReport(transport_error="x"), consecutive_failures=1)
+    engine = create_async_engine("postgresql+asyncpg://u:p@localhost:1/db")
+    register_resource_gauges(meter, engine=engine, attrs={"store_id": "s"}, disk_path=str(ROOT))
 
     names: set[str] = set()
     data = reader.get_metrics_data()
@@ -84,7 +88,7 @@ def _metric_names(expr: str) -> set[str]:
     stripped = re.sub(r"\b\d+(\.\d+)?(e[-+]?\d+)?\b", " ", stripped)  # hằng số (1e-9, 0.95)
     return {w for w in re.findall(r"[a-z_][a-z0-9_]*", stripped) if w not in _PROMQL} - {
         # nhãn trong by (...) — không phải metric
-        "job", "store_id", "table", "outcome", "reason", "level", "layer",
+        "job", "store_id", "table", "outcome", "reason", "level", "layer", "service", "watched",
     }  # fmt: skip
 
 

@@ -1,0 +1,7 @@
+# Đo overhead OpenTelemetry (ADR-009, docs/16 §4): edge-api-store-001 chạy KHÔNG instrumentation.
+# Endpoint rỗng = `OtelSettings.enabled` là False → không tracer, không meter, không instrument
+# FastAPI. Dùng bởi tests/scenarios/test_load.py::test_otel_overhead (tự bật lại khi xong).
+services:
+  edge-api-store-001:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: ""

@@ -688,8 +688,8 @@
     {
       "type": "stat",
       "id": 11,
-      "title": "Cửa hàng không thấy > 1 giờ",
-      "description": "stores_not_seen_recently (docs/08 §5). Ngoài giờ bán tăng là bình thường — chỉ đáng lo trong giờ mở cửa.",
+      "title": "Cửa hàng im lặng > 1 giờ",
+      "description": "stores_not_seen_recently (docs/08 §5). Worker rảnh gửi heartbeat mỗi 5 phút, nên im lặng 1 giờ = worker, mạng hoặc máy cửa hàng đã chết — kể cả ngoài giờ bán. Chỉ cửa hàng `watched` (FLOW_MONITOR_WATCH_STORES; cửa hàng ảo im lặng là bình thường).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -707,7 +707,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "count(max by (store_id) (store_last_seen_age_seconds) > 3600) or vector(0)",
+          "expr": "count(max by (store_id) (store_last_seen_age_seconds{watched=\"1\"}) > 3600) or vector(0)",
           "instant": true
         }
       ],
@@ -738,7 +738,7 @@
                 "value": null
               },
               {
-                "color": "yellow",
+                "color": "red",
                 "value": 1
               }
             ]
@@ -753,8 +753,8 @@
     {
       "type": "stat",
       "id": 12,
-      "title": "Lô bị từ chối vì quá tải (1 giờ)",
-      "description": "503 backpressure của POST /events. Có thì cửa hàng lùi rồi gửi lại (không mất gì); kéo dài = trung tâm thiếu sức chứa.",
+      "title": "Lô bị từ chối: quá tải / rate limit (1 giờ)",
+      "description": "503 (semaphore) và 429 (một cửa hàng gửi quá nhanh) của POST /events. Cửa hàng lùi đúng Retry-After rồi gửi lại (không mất gì); kéo dài = trung tâm thiếu sức chứa.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1471,7 +1471,7 @@
       "type": "timeseries",
       "id": 24,
       "title": "Trễ đồng bộ theo cửa hàng",
-      "description": "recorded_at − occurred_at của lô gần nhất (FR-C10). > 900 s = LAGGING.",
+      "description": "recorded_at - occurred_at của lô gần nhất (FR-C10). > 900 s = LAGGING.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1548,8 +1548,8 @@
     {
       "type": "timeseries",
       "id": 25,
-      "title": "Lần cuối cửa hàng gửi được",
-      "description": "stores_not_seen_recently = số series > 3600. Ngoài giờ bán tăng là bình thường.",
+      "title": "Lần cuối cửa hàng liên lạc",
+      "description": "Lô sự kiện hoặc heartbeat (5 phút một lần khi rảnh). > 3600 s ở cửa hàng watched = cảnh báo.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1852,7 +1852,7 @@
     {
       "type": "row",
       "id": 30,
-      "title": "Toàn luồng — độ tươi L2/L4 và đối soát xuyên tầng",
+      "title": "Tài nguyên — đĩa, kết nối, đường truyền (docs/08 §5)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1865,8 +1865,329 @@
     {
       "type": "timeseries",
       "id": 31,
+      "title": "Đĩa cửa hàng đã dùng",
+      "description": "disk_used_pct (docs/08 §5): > 75% = nguy cơ chí tử. Cảnh báo phải tới TRƯỚC lần ghi đầu tiên lỗi (CH-4).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (store_id) (disk_used_ratio{store_id=~\"$store\"})",
+          "legendFormat": "{{store_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.75
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 32,
+      "title": "Pool kết nối DB đang dùng",
+      "description": "db_connections_used (docs/08 §5): > 80% pool = request sắp phải chờ kết nối.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 6,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (store_id) (db_pool_used_ratio{store_id=~\"$store\"})",
+          "legendFormat": "{{store_id}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service) (db_pool_used_ratio{service!=\"\"})",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.8
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 33,
+      "title": "Postgres trung tâm: kết nối / max_connections",
+      "description": "pg_connections_used (docs/08 §5): > 70% = cần PgBouncer (docs/02 §4, LD-4).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(pg_connections_used_ratio)",
+          "legendFormat": "central-db"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.7
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 34,
+      "title": "Sync worker: lỗi đường truyền liên tiếp",
+      "description": "circuit_breaker_state (docs/08 §5): > 0 suốt 10 phút = mất kết nối trung tâm kéo dài. Heartbeat giữ số này đúng cả khi cửa hàng không bán gì.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 46
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (store_id) (sync_consecutive_failures{store_id=~\"$store\"})",
+          "legendFormat": "{{store_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "line",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 35,
+      "title": "Toàn luồng — độ tươi L2/L4 và đối soát xuyên tầng",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 54
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 36,
       "title": "Độ tươi theo tầng và cửa hàng",
-      "description": "now − occurred_at mới nhất. Giờ bán: L2 < 5 phút, L4 < 1 chu kỳ DAG + 10 phút (docs/17 §6).",
+      "description": "now - occurred_at mới nhất. Giờ bán: L2 < 5 phút, L4 < 1 chu kỳ DAG + 10 phút (docs/17 §6).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1875,7 +2196,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 46
+        "y": 55
       },
       "targets": [
         {
@@ -1938,7 +2259,7 @@
     },
     {
       "type": "timeseries",
-      "id": 32,
+      "id": 37,
       "title": "Audit: tầng tụt sau tầng tươi nhất",
       "description": "Từ simulator audit (--watch). 0 ở mọi tầng = đã bắt kịp. Đúng cả ở chế độ virtual.",
       "datasource": {
@@ -1949,7 +2270,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 46
+        "y": 55
       },
       "targets": [
         {
@@ -2003,7 +2324,7 @@
     },
     {
       "type": "timeseries",
-      "id": 33,
+      "id": 38,
       "title": "Audit: phát hiện theo mức",
       "description": "CONVERGING = đang chảy (bình thường). DIVERGED > 0 = sự cố.",
       "datasource": {
@@ -2014,7 +2335,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 46
+        "y": 55
       },
       "targets": [
         {

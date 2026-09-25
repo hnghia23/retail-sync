@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+#: Kích thước pool của MỌI engine. Metric `db_pool_used_ratio` (docs/08 §5 "db_connections_used
+#: > 80% pool") chia cho đúng tổng này.
+POOL_SIZE = 10
+MAX_OVERFLOW = 10
+
 
 def make_engine(
     database_url: str,
@@ -38,8 +43,8 @@ def make_engine(
     return create_async_engine(
         database_url,
         echo=echo,
-        pool_size=10,
-        max_overflow=10,
+        pool_size=POOL_SIZE,
+        max_overflow=MAX_OVERFLOW,
         pool_pre_ping=True,
         pool_recycle=1800,
         connect_args=connect_args,

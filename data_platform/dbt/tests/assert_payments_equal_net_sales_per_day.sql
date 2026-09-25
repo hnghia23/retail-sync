@@ -6,11 +6,13 @@ SELECT store_key, date_key, paid, sold
 FROM (
     SELECT store_key, date_key, sum(amount) AS paid
     FROM {{ ref('fact_payment') }}
+    WHERE occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})
     GROUP BY store_key, date_key
 ) AS p
 FULL OUTER JOIN (
     SELECT store_key, date_key, sum(net_amount) AS sold
     FROM {{ ref('fact_sale_line') }}
+    WHERE occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})
     GROUP BY store_key, date_key
 ) AS s USING (store_key, date_key)
 WHERE coalesce(paid, 0) != coalesce(sold, 0)

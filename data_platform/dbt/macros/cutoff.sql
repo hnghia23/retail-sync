@@ -20,12 +20,13 @@
   vào giữa sẽ cho hai mép khác nhau, và dòng nằm giữa hai mép thuộc tháng "không bị ảnh hưởng"
   sẽ bị bỏ qua VĨNH VIỄN (lần sau `_recorded_at` lớn nhất đã vượt qua chúng).
 
-  ## affected_months(rel, cutoff)
+  ## affected_month_list(table, version_col, cutoff) — macros/incremental.sql
 
   Bẫy 5: tập tháng cần thay = tháng của `occurred_at` của các dòng MỚI (recorded_at lớn hơn mốc
   lớn nhất đã có trong fact). Cửa hàng offline vắt qua cuối tháng → tháng trước nằm trong tập,
   và được tính lại TRỌN tháng (`insert_overwrite` thay nguyên phân vùng). Không hardcode
-  "tháng này".
+  "tháng này". Bản đầu (`affected_months`) đọc view staging khử trùng toàn bộ lịch sử — thay ở
+  LD-3 bằng bản đọc thẳng bronze có cắt phân vùng.
 -#}
 
 {% macro incremental_tables() -%}
@@ -52,11 +53,4 @@
 {%- else -%}
     toDateTime64(0, 6, 'UTC')
 {%- endif -%}
-{%- endmacro %}
-
-{% macro affected_months(rel, cutoff) -%}
-SELECT DISTINCT toYYYYMM(occurred_at)
-FROM {{ rel }}
-WHERE recorded_at < {{ cutoff }}
-  AND recorded_at > (SELECT max(_recorded_at) FROM {{ this }})
 {%- endmacro %}

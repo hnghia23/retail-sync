@@ -32,10 +32,16 @@ def _ts(value: datetime) -> str:
 
 class Bronze:
     def __init__(self, ch: ClickHouse) -> None:
+        self._until: dict[str, datetime] = {}
         self.ch = ch
 
     def _insert(self, table: str, row: dict[str, str], *, dt: str = "2026-09-01") -> None:
-        row = row | {"_dt": f"toDate('{dt}')", "_source_file": f"'test/{next(_seq)}'"}
+        # `_dt` = ngày của `recorded_at` — đúng bất biến mà S4 giữ (phân vùng `dt=` là ngày đầu
+        # cửa sổ chứa `recorded_at`) và mà fact tăng dần dựa vào để cắt phân vùng
+        # (macros/incremental.sql). Master data không có `recorded_at`: ngày cố định.
+        stamp = row.get("recorded_at") or row.get("updated_at")
+        day = f"toDate({stamp})" if stamp else f"toDate('{dt}')"
+        row = row | {"_dt": day, "_source_file": f"'test/{next(_seq)}'"}
         self.ch.query(
             f"INSERT INTO {table} ({', '.join(row)}) SELECT {', '.join(row.values())}",
             insert_deduplicate=0,
@@ -133,14 +139,18 @@ class Bronze:
         )  # fmt: skip
 
     def loaded(self, until: datetime, *, tables: tuple[str, ...] = INCREMENTAL) -> None:
-        """Nhật ký nạp: các bảng đã nạp liền mạch tới `until`."""
+        """Nhật ký nạp: các bảng đã nạp LIỀN MẠCH tới `until` — cửa sổ mới bắt đầu đúng ở mép
+        cuối của cửa sổ trước, như S4 (lần đầu: phủ 60 ngày trước đó). Fact tăng dần dựa vào
+        điều đó để biết phân vùng `_dt` nào có thể chứa dòng của một tháng."""
         for table in tables:
+            start = self._until.get(table, until - timedelta(days=60))
             self.ch.query(
                 "INSERT INTO bronze_load_log (table_name, path, sha256, rows, window_start,"
                 f" window_end) SELECT '{table}', 'log/{next(_seq)}', 'x', 0,"
-                f" {_ts(until - timedelta(hours=1))}, {_ts(until)}",
+                f" {_ts(start)}, {_ts(until)}",
                 insert_deduplicate=0,
             )
+            self._until[table] = until
 
 
 @pytest.fixture

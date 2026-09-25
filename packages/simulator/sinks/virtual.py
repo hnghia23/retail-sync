@@ -22,6 +22,7 @@ vốn tin đồng hồ cửa hàng. Ngày giả lập nằm trong QUÁ KHỨ (m�
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import time
 import uuid
@@ -367,6 +368,10 @@ class _VirtualStore:
         batch_size = self.settings.batch_size
         while not deadline.is_set():
             if not self.producing and not self.outbox:
+                # Outbox trống, không còn gì để bán: worker thật lúc này gửi heartbeat — trung tâm
+                # ghi nhận "cửa hàng đã bắt kịp" (trễ đồng bộ về 0).
+                with contextlib.suppress(CentralUnavailableError):
+                    await self.client.push([])
                 return
             now = loop.time()
             if self.offline is not None:
@@ -440,16 +445,19 @@ class _VirtualStore:
         )
 
     async def _resend(self, envelopes: list[dict[str, object]], accepted: set[str]) -> None:
-        """CH-7: gửi lại nguyên lô vừa được nhận. Idempotency phải trả `accepted` cho MỌI sự
-        kiện đã nhận lần trước — thiếu là trung tâm "quên" nó đã nhận gì."""
-        try:
-            again = await self.client.push(envelopes)
-        except CentralUnavailableError:
-            return  # lần gửi lại mất mạng — không có gì để kiểm
-        self.stats["resent_batches"] += 1
-        missing = accepted - {str(e) for e in again.accepted}
-        if missing:
-            self.stats["resend_mismatch"] += len(missing)
+        """CH-7: gửi lại nguyên lô vừa được nhận, `resend_times` lần. Idempotency phải trả
+        `accepted` cho MỌI sự kiện đã nhận lần trước — thiếu là trung tâm "quên" nó đã nhận gì."""
+        for _ in range(max(1, self.quirks.resend_times)):
+            try:
+                again = await self.client.push(envelopes)
+            except CentralUnavailableError as exc:
+                if exc.retry_after is not None:  # 429/503: lùi như worker thật rồi gửi tiếp
+                    await asyncio.sleep(exc.retry_after)
+                continue  # mất mạng giữa chừng — lần này không có gì để kiểm
+            self.stats["resent_batches"] += 1
+            missing = accepted - {str(e) for e in again.accepted}
+            if missing:
+                self.stats["resend_mismatch"] += len(missing)
 
     def finish(self) -> None:
         self.stats["pending"] = len(self.outbox)

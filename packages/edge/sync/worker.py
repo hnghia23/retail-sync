@@ -116,6 +116,21 @@ class BatchReport:
     dead_lettered: int = 0
     transport_error: str | None = None
     retry_after: float | None = None
+    #: Vòng này là heartbeat (lô rỗng), không phải lô thật.
+    heartbeat: bool = False
+
+
+async def heartbeat(client: CentralClient) -> BatchReport:
+    """Lô RỖNG: trung tâm ghi nhận "cửa hàng còn sống", worker biết đường truyền còn thông.
+
+    Không có heartbeat thì một cửa hàng không bán gì trông y hệt một cửa hàng đã chết, và một
+    worker rảnh không bao giờ phát hiện trung tâm mất — `sync_consecutive_failures` đứng ở 0
+    đúng lúc lẽ ra phải báo."""
+    try:
+        await client.push([])
+    except CentralUnavailableError as exc:
+        return BatchReport(transport_error=str(exc), retry_after=exc.retry_after, heartbeat=True)
+    return BatchReport(heartbeat=True)
 
 
 async def claim_batch(session: AsyncSession, *, batch_size: int) -> list[dict[str, Any]]:
@@ -279,6 +294,8 @@ async def run_forever(
     failures = 0
     loop = asyncio.get_running_loop()
     next_prune = loop.time()  # dọn một lượt ngay khi khởi động, rồi theo chu kỳ
+    # Lần cuối trung tâm TRẢ LỜI (lô thật hay heartbeat). Khởi động = chưa biết → heartbeat ngay.
+    last_contact = float("-inf")
     while not stop.is_set():
         if loop.time() >= next_prune:
             next_prune = loop.time() + settings.prune_interval_seconds
@@ -298,6 +315,15 @@ async def run_forever(
         except Exception:
             log.exception("sync: lỗi cục bộ, sẽ thử lại")
             report = BatchReport(transport_error="local_error")
+
+        if (
+            not report.claimed
+            and not report.transport_error
+            and loop.time() - last_contact >= settings.heartbeat_seconds
+        ):
+            report = await heartbeat(client)
+        if report.transport_error is None and (report.claimed or report.heartbeat):
+            last_contact = loop.time()
 
         if report.transport_error:
             failures += 1

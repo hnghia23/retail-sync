@@ -37,6 +37,30 @@ test-all:  ## Toàn bộ test (cần Docker cho integration)
 test-scenarios:  ## AT-01..04, AT-07, AT-10, DI-1..3 tren COMPOSE THAT (tat central-api trong AT-02!). Stack dung bang make bootstrap
 	RETAIL_SYNC_SCENARIOS=1 uv run pytest tests/scenarios -v
 
+.PHONY: test-chaos
+test-chaos:  ## CH-1..7 tren COMPOSE THAT (giet tien trinh, ngat mang, lam day dia; CH-1 30 phut). Can profile observability
+	RETAIL_SYNC_SCENARIOS=1 RETAIL_SYNC_CHAOS=1 uv run pytest tests/scenarios/test_chaos.py -v $(ARGS)
+
+.PHONY: test-alert-drills
+test-alert-drills:  ## Dien tap canh bao (tao dieu kien that cho tung rule, cho Grafana keu + alert-sink nhan)
+	RETAIL_SYNC_SCENARIOS=1 RETAIL_SYNC_ALERT_DRILLS=1 uv run pytest tests/scenarios/test_alert_drills.py -v $(ARGS)
+
+.PHONY: test-load
+test-load:  ## LD-1, LD-2, LD-4 + overhead OTel tren compose (hang tram nghin su kien vao stack dev)
+	RETAIL_SYNC_SCENARIOS=1 RETAIL_SYNC_LOAD=1 uv run pytest tests/scenarios/test_load.py -v $(ARGS)
+
+.PHONY: alert-watch
+alert-watch:  ## Ghi moi lan doi trang thai cua canh bao -> runs/alerts/timeline.jsonl (chay nen). REPORT=1 tong ket
+	uv run python infra/alert_watch.py $(if $(REPORT),--report runs/alerts/timeline.jsonl,)
+
+.PHONY: ld3
+ld3:  ## LD-3: T2 24 thang -> lake (bronze/bulk-t2) -> ClickHouse dw_bulk tung thang + dbt -> truy van lop C (nhieu gio)
+	uv run python infra/loadtest/ld3_warehouse.py --months $(or $(MONTHS),24) --workers $(or $(WORKERS),6) $(ARGS)
+
+.PHONY: seam-ledger
+seam-ledger:  ## ~50 trieu dong point_ledger vao DB rieng central_seam, EXPLAIN co/khong partition pruning. WORK=runs/<bulk>/work
+	uv run python infra/loadtest/seam_ledger.py $(foreach w,$(WORK),--work $(w)) $(ARGS)
+
 # ── Hạ tầng ──
 .PHONY: bootstrap
 bootstrap:  ## Dung stack tu con so 0 (migrate, seed, cap khoa, lake, cho DAG) - chay lai duoc. OBS=1 them observability
@@ -105,6 +129,10 @@ provision-virtual:  ## Cap khoa N cua hang that cho che do virtual -> runs/virtu
 .PHONY: sim-virtual
 sim-virtual:  ## Bo gia lap che do virtual (20 cua hang ao -> POST /events). PROFILE, DAYS, START, RATE, QUIRKS
 	uv run python -m simulator run --mode virtual --profile $(or $(PROFILE),t1) --keys runs/virtual-keys.env --days $(or $(DAYS),3) $(if $(START),--start-date $(START),) --rate $(or $(RATE),270) --seed $(or $(SEED),42) --quirks $(or $(QUIRKS),offline,resend,concurrent_customer)
+
+.PHONY: sim-bulk
+sim-bulk:  ## Che do bulk: lich su nhieu thang -> Parquet bronze tren lake (prefix RIENG bronze/bulk-<profile>). PROFILE, MONTHS, WORKERS
+	uv run python -m simulator bulk --profile $(or $(PROFILE),t2) --months $(or $(MONTHS),1) --workers $(or $(WORKERS),6)
 
 .PHONY: sim-audit
 sim-audit:  ## Doi soat MANIFEST L0-L2 (EDGE_DSN, CENTRAL_DSN); them CLICKHOUSE=http://u:p@host:8123/dw de co L3+L4; WATCH=300 lap lai; OTLP=http://localhost:4318 day len dashboard

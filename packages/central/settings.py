@@ -28,6 +28,21 @@ class CentralSettings(BaseSettings):
     ingest_max_batch: int = 500
     ingest_max_concurrency: int = 8
     ingest_retry_after_seconds: int = 5
+    # Rate limit THEO CỬA HÀNG (token bucket, `429` + Retry-After) — một cửa hàng xả tồn đọng
+    # không được giữ hết lượt của semaphore ở trên (`central.ingest.ratelimit`). 10 req/giây ×
+    # lô 200 = 2000 sự kiện/giây/cửa hàng: không bao giờ chạm khi đồng bộ bình thường (một lô vài
+    # giây một lần). 0 = tắt.
+    ingest_store_rate_per_second: float = 10.0
+    ingest_store_burst: int = 20
+
+    # Quét TOÀN BỘ INV-4 (docs/08 §4.2 "mỗi tháng quét toàn bộ một lần vào giờ thấp điểm"):
+    # `central-maintenance` chạy nó khi lần quét cuối cũ hơn N ngày VÀ giờ hiện tại (theo giờ cửa
+    # hàng) nằm trong [start, end). Tới 2026-09-25 lệnh `--full` có nhưng không ai lên lịch.
+    reconcile_full_every_days: float = 30.0
+    reconcile_full_start_hour: int = 1
+    reconcile_full_end_hour: int = 5
+    # Giờ cửa hàng (VN, không có giờ mùa hè) — cùng giá trị với STORE_UTC_OFFSET_MINUTES ở edge.
+    store_utc_offset_minutes: int = 420
 
     # Trần độ dài MỌI transaction của Central API (`transaction_timeout`, PostgreSQL 17+).
     # Trích xuất bronze lấy mép cửa sổ = transaction đang mở cũ nhất (`extract_horizon()`,

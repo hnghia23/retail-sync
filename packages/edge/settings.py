@@ -46,6 +46,11 @@ class EdgeSettings(BaseSettings):
     # index mỗi lần — rẻ, nhưng không cần dày hơn chu kỳ đẩy metric (15 s trong compose).
     outbox_metrics_interval_seconds: float = 15.0
 
+    # Đĩa của máy cửa hàng cho metric `disk_used_ratio` (docs/08 §5, CH-4). Phải nằm trên cùng
+    # đĩa với dữ liệu Postgres cửa hàng: ở một máy cửa hàng thật đó là `/`; trong compose mọi
+    # container và named volume cũng chung một đĩa của máy ảo Docker.
+    disk_path: str = "/"
+
     debug: bool = False
 
 

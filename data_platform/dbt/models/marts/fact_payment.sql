@@ -7,17 +7,14 @@
 ) }}
 {#-
   BẢNG RIÊNG cho thanh toán (ràng buộc #5): một đơn có N dòng hàng VÀ M lần thanh toán — gộp
-  chung thì join thành tích Descartes, nhân doanh thu N×M lần. Tăng dần như fact_sale_line.
+  chung thì join thành tích Descartes, nhân doanh thu N×M lần. Tăng dần như fact_sale_line
+  (đọc thẳng bronze, O(tháng bị ảnh hưởng) — macros/incremental.sql).
 -#}
 {%- set cutoff = pipeline_cutoff() %}
+{%- set months = affected_month_list('sale', 'recorded_at', cutoff) %}
 
 WITH sales AS (
-    SELECT *
-    FROM {{ ref('stg_sale') }}
-    WHERE recorded_at < {{ cutoff }}
-    {%- if is_incremental() %}
-      AND toYYYYMM(occurred_at) IN ({{ affected_months(ref('stg_sale'), cutoff) }})
-    {%- endif %}
+    {{ latest_sales(cutoff, months) }}
 )
 
 SELECT
@@ -32,5 +29,10 @@ SELECT
     s.status AS sale_status,
     s.occurred_at AS occurred_at,
     s.recorded_at AS _recorded_at
-FROM {{ ref('stg_sale_payment') }} AS p
+FROM (
+    SELECT * EXCEPT (_dt, _source_file)
+    FROM {{ source('bronze', 'bronze_sale_payment') }}
+    WHERE recorded_at < {{ cutoff }}{{ child_dt_filter('sale_payment', months) }}
+      AND (sale_id, recorded_at) IN (SELECT sale_id, recorded_at FROM sales)
+) AS p
 INNER JOIN sales AS s ON s.sale_id = p.sale_id AND s.recorded_at = p.recorded_at

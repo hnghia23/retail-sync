@@ -94,13 +94,19 @@ Nhưng vẫn cần: job dọn dòng `sent_at` cũ hơn 7 ngày, và metric cản
 
 | Cơ chế | Cấu hình |
 |---|---|
-| Giới hạn kích thước lô | 100–500 sự kiện/request |
-| Rate limit theo cửa hàng | Ví dụ 10 req/giây/CH; vượt → `429` + `Retry-After` |
-| Backoff có jitter ở worker | `min(2^n, 300)` giây × random(0.5–1.5) — jitter là bắt buộc, không có thì mọi CH retry đồng pha |
-| Giới hạn concurrency ở ingest | Semaphore; vượt → `503` + `Retry-After` |
+| Giới hạn kích thước lô | 100–500 sự kiện/request (`SYNC_BATCH_SIZE` 200, `INGEST_MAX_BATCH` 500 → `413`) |
+| Rate limit theo cửa hàng | Token bucket 10 req/giây/CH, dồn 20 (`INGEST_STORE_RATE_PER_SECOND`, `INGEST_STORE_BURST`); vượt → `429` + `Retry-After` |
+| Backoff có jitter ở worker | Jitter toàn phần: random(0, `min(2^n, 240)`) giây — không có jitter thì mọi CH retry đồng pha |
+| Giới hạn concurrency ở ingest | Semaphore `INGEST_MAX_CONCURRENCY` (8); vượt → `503` + `Retry-After` |
 
 **Nguyên tắc:** trung tâm **từ chối tử tế** thay vì sập. Cửa hàng đã có outbox nên bị từ chối
 không mất gì — chỉ chậm hơn.
+
+> ✅ **2026-09-25 (giai đoạn B):** cả bốn cơ chế đã có. Rate limit theo cửa hàng là bản mới
+> (`central.ingest.ratelimit`): trong bộ nhớ của MỘT tiến trình Central API — chạy N bản thì giới
+> hạn thực là N × 10 req/s; seam: đưa bucket sang Redis khi cần chính xác trên nhiều bản. Trần
+> backoff hạ từ 300 xuống **240 giây**: jitter toàn phần nên lần ngủ cuối dài tới đúng trần, và
+> NFR-04 / CH-1 đòi hội tụ < 5 phút sau khi nối lại — 300 giây không còn chỗ cho thời gian xả lô.
 
 ---
 

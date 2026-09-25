@@ -111,6 +111,13 @@ ignore = [
 "infra/store_backup.py" = ["S603", "S607", "S608"]
 # Bộ đối soát ghép SQL ClickHouse từ UUID đã qua `uuid.UUID()` và store_id đã lọc dấu nháy.
 "packages/simulator/audit.py" = ["S608"]
+# Bảng khai báo panel/rule (một dòng mỗi mục, chuỗi mô tả dài): dòng dài là dữ liệu, không phải code.
+"infra/observability/build_*.py" = ["E501"]
+# Diễn tập cảnh báo ghép SQL từ tên partition / UUID mà chính nó vừa đọc từ DB test.
+"tests/scenarios/test_alert_drills.py" = ["S608"]
+# Script đo tải/khối lượng: gọi lệnh cố định qua tiến trình con, SQL là hằng của bộ truy vấn lớp C
+# và tên database do chính script đặt.
+"infra/loadtest/*.py" = ["S603", "S607", "S608", "E501", "ASYNC221", "ASYNC240"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["shared", "edge", "central", "simulator", "pipeline"]
@@ -118,7 +125,7 @@ known-first-party = ["shared", "edge", "central", "simulator", "pipeline"]
 # ───────────────────────────── mypy ─────────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["packages", "tests", "infra/bootstrap.py", "infra/store_backup.py"]
+files = ["packages", "tests", "infra/bootstrap.py", "infra/store_backup.py", "infra/alert_watch.py", "infra/loadtest"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true

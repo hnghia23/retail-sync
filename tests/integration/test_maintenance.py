@@ -71,3 +71,31 @@ async def test_partition_failure_does_not_stop_reconciliation(
         "SELECT last_run_at IS NOT NULL FROM reconciliation_watermark"
         " WHERE job_name = 'point_balance_vs_ledger'"
     )
+
+
+async def test_full_scan_runs_when_due_and_records_its_own_watermark(
+    central_db: Any, factory: Any
+) -> None:
+    """Lượt tăng dần đầu tiên chưa có mốc cũng quét hết; sau đó chỉ tới hạn mới quét toàn bộ, và
+    mốc riêng `point_balance_vs_ledger:full` là thứ bộ giám sát canh (rs-reconcile-full)."""
+    from datetime import UTC, datetime
+
+    policy = maintenance.FullScanPolicy(every_days=30, start_hour=1, end_hour=5)
+    off_peak = datetime(2026, 9, 24, 19, 0, tzinfo=UTC)  # 02:00 giờ cửa hàng
+    rules = ReturnRules(_env_file=None)
+
+    first = await maintenance.run_once(
+        factory, rules=rules, months_ahead=3, full_scan=policy, now=off_peak
+    )
+    assert first.reconcile is not None and first.reconcile.full
+    full_at = await central_db.fetchval(
+        "SELECT last_run_at FROM reconciliation_watermark"
+        " WHERE job_name = 'point_balance_vs_ledger:full'"
+    )
+    assert full_at is not None
+
+    again = await maintenance.run_once(
+        factory, rules=rules, months_ahead=3, full_scan=policy, now=off_peak
+    )
+    assert again.reconcile is not None and not again.reconcile.full  # chưa tới hạn: tăng dần
+    assert "reconcile[incremental]" in maintenance.describe(again)

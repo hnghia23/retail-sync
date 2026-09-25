@@ -27,12 +27,15 @@ test hỗn loạn thấy được diễn biến theo phút).
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from shared.config import OtelSettings
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from opentelemetry.metrics import Meter
+    from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Cờ tiến trình — cùng lý do với `shared.tracing._tracing_initialized`: `set_meter_provider()`
 # gọi lần hai bị bỏ qua ÂM THẦM, provider giữ resource của lần đầu.
@@ -69,6 +72,58 @@ def setup_metrics(service_name: str, *, settings: OtelSettings | None = None) ->
     )
     metrics.set_meter_provider(provider)
     _metrics_initialized = True
+
+
+def register_resource_gauges(
+    meter: Meter,
+    *,
+    engine: AsyncEngine,
+    attrs: Mapping[str, str],
+    disk_path: str | None = None,
+) -> None:
+    """Hai chỉ số tài nguyên của docs/08 §5, đọc ngay lúc export (rẻ, không chạm DB):
+
+    - `db_pool_used_ratio` — kết nối pool đang cho mượn / (pool_size + max_overflow). Ngưỡng 80%:
+      request tiếp theo sẽ phải CHỜ kết nối, độ trễ tăng trước khi có lỗi nào.
+    - `disk_used_ratio` (khi có `disk_path`) — đĩa của máy cửa hàng. Ngưỡng 75%: "đầy đĩa" là
+      rủi ro chí tử ở cửa hàng (docs/08 §3.1), và cảnh báo phải tới TRƯỚC lần ghi đầu tiên lỗi
+      (CH-4). Đo đường dẫn nằm trên cùng đĩa với dữ liệu Postgres cửa hàng.
+    """
+    import shutil
+
+    from opentelemetry.metrics import Observation
+
+    from shared.db import MAX_OVERFLOW, POOL_SIZE
+
+    labels = dict(attrs)
+    pool = engine.sync_engine.pool
+
+    def pool_used(_options: Any) -> list[Observation]:
+        checked_out = pool.checkedout() if hasattr(pool, "checkedout") else 0
+        return [Observation(checked_out / (POOL_SIZE + MAX_OVERFLOW), labels)]
+
+    meter.create_observable_gauge(
+        "db_pool_used_ratio",
+        callbacks=[pool_used],
+        unit="1",
+        description="Tỉ lệ kết nối pool DB đang dùng",
+    )
+    if disk_path is None:
+        return
+
+    def disk_used(_options: Any) -> list[Observation]:
+        try:
+            usage = shutil.disk_usage(disk_path)
+        except OSError:
+            return []  # đường dẫn chưa mount: không báo gì, thay vì báo 0% trông như đĩa trống
+        return [Observation(usage.used / usage.total, labels)] if usage.total else []
+
+    meter.create_observable_gauge(
+        "disk_used_ratio",
+        callbacks=[disk_used],
+        unit="1",
+        description="Tỉ lệ dung lượng đĩa đã dùng",
+    )
 
 
 def get_meter(name: str) -> Meter:

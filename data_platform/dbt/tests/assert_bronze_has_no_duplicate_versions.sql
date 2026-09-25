@@ -12,6 +12,7 @@
 {%- for table, key in checks %}
 SELECT '{{ table }}' AS tbl, count() AS n
 FROM {{ source('bronze', table) }}
+WHERE toDate32(_dt) >= toDate32(today()) - {{ var('test_window_days', 35) }}
 GROUP BY {{ key }}
 HAVING n > 1
 {{ 'UNION ALL' if not loop.last }}

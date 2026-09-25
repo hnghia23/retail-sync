@@ -53,9 +53,13 @@ from shared.db import transaction
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-__all__ = ["JOB_NAME", "Drift", "ReconcileReport", "reconcile_points"]
+__all__ = ["FULL_JOB_NAME", "JOB_NAME", "Drift", "ReconcileReport", "reconcile_points"]
 
 JOB_NAME = "point_balance_vs_ledger"
+#: Mốc RIÊNG của lần quét toàn bộ gần nhất. Lượt tăng dần chạy mỗi giờ nên mốc của nó không nói
+#: được lần quét toàn bộ cuối là bao giờ — mà đó mới là lưới bắt snapshot hỏng của khách không còn
+#: giao dịch (đánh đổi của ràng buộc #8). `central.ops.maintenance` lên lịch theo mốc này.
+FULL_JOB_NAME = "point_balance_vs_ledger:full"
 
 #: Số khách mỗi transaction. Khách nhiều dòng ledger thì mỗi lô nặng hơn; 500 giữ một lô
 #: dưới cỡ giây ở dữ liệu T2 mà vẫn ít round-trip.
@@ -244,6 +248,11 @@ async def reconcile_points(
         await session.execute(
             _ADVANCE, {"job": JOB_NAME, "horizon": horizon, "mismatches": len(report.drifts)}
         )
+        if scanned_all:
+            await session.execute(
+                _ADVANCE,
+                {"job": FULL_JOB_NAME, "horizon": horizon, "mismatches": len(report.drifts)},
+            )
     return report
 
 

@@ -206,8 +206,12 @@ class Dbt:
     workdir: Path
 
     def build(self, *args: str) -> Any:
+        """`dbt build`. Test chạy trên TOÀN BỘ lịch sử (`test_window_days` rất lớn): dữ liệu test
+        mang ngày bất kỳ, còn cửa sổ 35 ngày mặc định là cho lượt DAG mỗi giờ ở quy mô thật."""
         import subprocess
 
+        if "--vars" not in args:
+            args = (*args, "--vars", "{test_window_days: 36500}")
         cmd = [
             "uvx", "--python", "3.12", "--with-requirements", str(DBT_REQUIREMENTS),
             "--from", "dbt-core", "dbt", "build",

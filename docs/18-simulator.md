@@ -70,6 +70,23 @@ payload sai hợp đồng sẽ không dựng được ngay từ đầu. Mỗi c�
 **Chế độ `bulk` ghi đúng schema mà bước trích xuất S4 ghi ra.** Một test hợp đồng so schema
 Parquet của hai bên. Lệch schema thì phép đo LD-3 đang đo một thứ khác với production.
 
+✅ **Đã hiện thực (2026-09-25)**, `packages/simulator/sinks/bulk_parquet.py` + lệnh `simulator bulk`:
+- Cùng `plan_store` (lịch ý định) và cùng domain của edge (`price_cart`, `resolve_tier`,
+  `points_earned_for`) như chế độ `virtual` — không có bộ tính tiền thứ hai. UUIDv7 mang mốc
+  `occurred_at` như cửa hàng sinh lúc bán; mọi thứ tất định theo seed (test: cùng seed → cùng
+  bytes Parquet).
+- Hai bước: sinh theo cửa hàng song song nhiều tiến trình (mảnh cục bộ chia theo tháng của
+  `recorded_at`), rồi gộp mỗi (bảng, tháng) thành MỘT file trên lake với cửa sổ `[đầu tháng,
+  đầu tháng sau)` — 24 × 7 file thay cho 120 nghìn file theo giờ. Bộ nạp và `loaded_until()`
+  không phụ thuộc độ dài cửa sổ.
+- **Prefix RIÊNG** `bronze/bulk-<profile>` (không bao giờ `bronze/central`), nạp bằng CHÍNH bộ nạp
+  thật `python -m pipeline load` (`LAKE_PREFIX`, `CLICKHOUSE_DB=dw_bulk`, `--until` để nạp từng
+  tháng như lịch production). Dữ liệu đo khối lượng không lẫn vào lake và warehouse thật.
+- Master data (cửa hàng, sản phẩm...) chép từ snapshot mới nhất của lake thật; cửa hàng là N cửa
+  hàng thật đầu tiên của master data, để `dim_store` có tên và vùng.
+- Test hợp đồng `tests/integration/test_bulk_schema.py`: schema từng bảng == `TableSpec.schema()`
+  của S4; DI-2/DI-3 và điểm đúng tại nguồn; đơn cuối tháng sang file tháng sau (bẫy 5).
+
 ## 4. Mô hình sinh dữ liệu
 
 Mọi con số dưới đây là **giả định cấu hình được** (`simulator/profiles/*.toml`), lấy từ
@@ -104,7 +121,7 @@ tần suất cấu hình được:
 | Offline **vắt qua cuối tháng**, đồng bộ vào tháng sau | `virtual` | S6, [bẫy 5](17-data-flow.md) |
 | Cùng SĐT đăng ký ở hai cửa hàng lúc cùng offline | cả hai | S3, C03 |
 | Cùng khách mua đồng thời ở hai cửa hàng | cả hai | S3, AT-04 |
-| Gửi lặp nguyên lô | `virtual` | S3, CH-7 |
+| Gửi lặp nguyên lô (`resend_share`, `resend_times` lần — CH-7: 10) | `virtual` | S3, CH-7 |
 | Đồng hồ cửa hàng lệch +10 phút | `virtual` | Phát hiện lệch đồng hồ ([08 §2.1](08-reliability-and-scale.md)) |
 | Sự kiện độc (`schema_version` 99), tỉ lệ rất thấp | `virtual` | Đường dead-letter |
 | Nhiều cửa hàng nối lại mạng cùng một lúc | `virtual` | Backpressure, CH-6 |
@@ -143,7 +160,7 @@ hoặc **vắng ở mọi tầng**. Có ở một nửa tầng thì là `DIVERGE
 uv run python -m simulator run --mode edge --profile t0 --duration 2h --rate x1 --seed 42
 uv run python -m simulator run --mode virtual --profile t1 --keys runs/virtual-keys.env \
     --days 3 --start-date 2026-08-30 --rate 270 --quirks offline,resend,concurrent_customer
-uv run python -m simulator bulk --profile t2 --months 24 --out s3://lake/bronze/central/
+uv run python -m simulator bulk --profile t2 --months 24 --workers 6   # → lake/bronze/bulk-t2
 uv run python -m simulator audit --run <run_id>
 ```
 
@@ -159,17 +176,17 @@ uv run python -m simulator audit --run <run_id>
 
 ```
 packages/simulator/            ✅ = đã có (2026-09-23)
-├── profiles/        ✅ t0.toml · t1.toml  (t2, t3 cùng chế độ virtual)  ← §4, chỉnh không sửa code
+├── profiles/        ✅ t0.toml · t1.toml · t2.toml · t3.toml  ← §4, chỉnh không sửa code
 ├── profile.py       ✅ đọc TOML, kiểm tính hợp lệ, tỉ lệ doanh số từng giờ
 ├── generator.py     ✅ thuần: (profile, seed, nonce, rate) → lịch ý định (mở ca, bán, đóng ca)
 ├── sinks/
 │   ├── edge_http.py      ✅ ý định → Edge API (httpx async, vòng hở, JWT của nhân viên đã seed)
 │   ├── virtual.py        ✅ ý định → envelope → HttpCentralClient (dùng lại của edge.sync)
-│   └── bulk_parquet.py   ⏳ ý định → Parquet đúng schema bronze
+│   └── bulk_parquet.py   ✅ ý định → Parquet đúng schema bronze (2026-09-25)
 ├── quirks.py        ✅ §5 — offline, resend, concurrent_customer (các tật khác: giai đoạn B)
 ├── manifest.py      ✅ §6 — ghi đáp án + độ trễ + CPU của chính bộ giả lập
 ├── audit.py         ✅ §6 — so đáp án với L1 (PG cửa hàng), L2 (PG trung tâm), L3 (bronze), L4 (mart)
-└── __main__.py      ✅ CLI `run` / `audit`
+└── __main__.py      ✅ CLI `run` / `bulk` / `audit`
 ```
 
 - Code nằm ở **`packages/simulator/`**, không phải thư mục gốc `simulator/` như bản đầu của doc
@@ -186,6 +203,13 @@ packages/simulator/            ✅ = đã có (2026-09-23)
 - **Phạm vi đối soát là các CA của lần chạy.** Dữ liệu khác trong cùng DB (lần chạy trước, bán
   tay qua UI) không làm nhiễu kết quả. So theo từng `sale_id`, không chỉ theo tổng: mất một đơn
   và nhân đôi một đơn cùng giá thì khớp tổng nhưng vẫn là hai lỗi.
+- **`5xx` ở `POST /sales` là "không rõ kết cục"**, không phải "bị từ chối" (2026-09-25, CH-2/CH-3):
+  máy chủ chết GIỮA lúc chốt thì commit có thể đã xong mà phản hồi mất. Chỉ `4xx` chắc chắn chưa
+  ghi gì. Xếp nhầm `5xx` vào `rejected` là bộ đối soát thấy "đơn thừa ở cửa hàng" và báo DIVERGED.
+  Mở/đóng ca thử lại khi mất kết nối hay `5xx` (thu ngân bấm lại) — an toàn vì mở lần hai trả
+  `409 SHIFT_ALREADY_OPEN` kèm `shift_id`, đóng lần hai trả `409`.
+- Cửa hàng ảo xả xong outbox thì gửi một **heartbeat** (lô rỗng) như worker thật lúc rảnh: trung
+  tâm ghi "đã bắt kịp", trễ đồng bộ về 0 (docs/13 §2).
 - Đóng ca: bộ giả lập đếm két bằng đúng số tiền mặt nó đã trả qua các đơn `201`, nên
   `variance ≠ 0` (khi không có đơn không rõ kết cục) là `DIVERGED`. Nhờ vậy phép cộng tiền mặt
   của đóng ca cũng được kiểm ở mỗi lần chạy.
@@ -226,10 +250,14 @@ chạy nhiều tiến trình giả lập song song (cửa hàng ảo chia theo d
 | 3 | ✅ `audit` cho L1, L2 (Postgres cửa hàng + trung tâm) | A |
 | 4 | ✅ Sink `virtual` + tật `offline`, `resend`, `concurrent_customer` (2026-09-24) | A |
 | 5 | ✅ `audit` cho L3 (`--clickhouse`) và L4 (`--marts`), 2026-09-24 | A — điều kiện của cổng A |
-| 6 | Sink `bulk` + test hợp đồng schema với bước trích xuất | B |
-| 7 | Các tật còn lại + profile `t2`, `t3` | B |
+| 6 | ✅ Sink `bulk` + test hợp đồng schema với bước trích xuất (2026-09-25) | B |
+| 7 | ✅ Profile `t2`, `t3`; `resend_times` cho CH-7. Tật đồng hồ lệch và sự kiện độc KHÔNG làm thành tật: sự kiện độc được diễn tập thẳng qua `POST /events` (`test_alert_drills.py`), đồng hồ lệch chưa có bộ phát hiện ở trung tâm để kiểm | B |
 
 ---
+*Changelog: 2026-09-25 — bước 6–7: chế độ `bulk` (prefix lake riêng, bộ nạp thật, nạp theo tháng),
+profile t2/t3, `resend_times`; `5xx` ở chốt đơn là "không rõ kết cục"; heartbeat cuối của cửa hàng
+ảo.*
+
 *Changelog: 2026-09-24 — bước 4 (chế độ `virtual` + 3 tật) hiện thực; §3 ghi các quyết định
 hiện thực (backoff tách module thuần, `build_envelope` dùng chung, khách ngoại chỉ khi trung tâm
 đã biết, ngày giả lập trong quá khứ, cấp khóa hàng loạt).*

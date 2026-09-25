@@ -101,7 +101,14 @@ Sự kiện đã xử lý ở lần gửi trước vẫn trả về trong `accep
 |---|---|
 | `401` | Thiếu khóa, khóa sai, hoặc đã thu hồi |
 | `413` | Lô vượt `INGEST_MAX_BATCH` (mặc định 500) |
+| `429` + `Retry-After` | CỬA HÀNG NÀY vượt `INGEST_STORE_RATE_PER_SECOND` (token bucket, mặc định 10 req/s, dồn tối đa `INGEST_STORE_BURST` = 20) — một cửa hàng xả tồn đọng không chiếm hết lượt của các cửa hàng khác (docs/08 §3.2, CH-6). Kiểm TRƯỚC semaphore |
 | `503` + `Retry-After` | Vượt `INGEST_MAX_CONCURRENCY` request đồng thời (docs/08 §3.2) |
+
+**Lô rỗng = heartbeat** (từ 2026-09-25). Worker rảnh gửi `[]` mỗi `SYNC_HEARTBEAT_SECONDS`
+(300): trả `200 {accepted: [], rejected: []}`, và trung tâm ghi nhận "cửa hàng còn sống, outbox
+đã trống" — `store_sync_status.updated_at = now()`, `lag_seconds = 0`. Không có nó thì cửa hàng
+không bán gì trông y hệt cửa hàng đã chết (`stores_not_seen_recently`), và worker rảnh không bao
+giờ phát hiện trung tâm mất. Heartbeat vẫn đi qua xác thực và rate limit như lô thường.
 
 `SaleReturned` **chưa có handler** (payload ở docs/12 §3.2 thiếu cột bắt buộc của
 `sale_replica`) — trả `retryable=true` để sự kiện chờ chứ không mất. Bổ sung khi làm trả hàng.
@@ -228,6 +235,9 @@ Nhiều quầy cùng đăng ký một SĐT cùng lúc → đúng một `201`, c�
 commit rồi mới cộng. Đơn tới sau thì bị `409 SHIFT_CLOSED` (docs/14 §3).
 
 ---
+*Changelog: 2026-09-25 — `POST /events`: thêm `429` (rate limit theo cửa hàng) và lô rỗng là
+heartbeat (giai đoạn B, CH-6 / `stores_not_seen_recently`).*
+
 *Changelog: 2026-09-23 (lần 2) — §5 hợp đồng `/customers`, `/shifts/open`, `/shifts/{id}/close`
 (đã hiện thực); mở/đóng ca chuyển từ module `reporting` sang `pos`.*
 

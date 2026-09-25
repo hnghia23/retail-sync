@@ -8,7 +8,7 @@
 {#-
   Mức chi tiết nhất: MỘT DÒNG SẢN PHẨM (docs/05 §7).
 
-  Tăng dần theo bẫy 5: chỉ dựng lại những tháng có dòng mới (`affected_months`), và dựng lại
+  Tăng dần theo bẫy 5: chỉ dựng lại những tháng có dòng mới (`affected_month_list`), và dựng lại
   TRỌN tháng — `insert_overwrite` thay nguyên phân vùng bằng kết quả. MergeTree thường, không
   ReplacingMergeTree: phân vùng được thay trọn gói nên không cần lưới an toàn, và lưới đó sẽ
   CHE lỗi nhân đôi mà bộ đối soát L4 phải thấy.
@@ -16,16 +16,15 @@
   Chiết khấu cấp đơn (hạng + khuyến mãi) được phân bổ xuống dòng theo tỉ lệ `line_total`, phần
   dư do làm tròn dồn vào dòng cuối, để Σ `net_amount` của một đơn = `total` CHÍNH XÁC tới đồng
   — và bằng Σ `fact_payment.amount` (cổng A).
+
+  Đọc THẲNG bronze với điều kiện tháng đẩy xuống trước khi khử trùng (macros/incremental.sql):
+  một lượt tốn O(tháng bị ảnh hưởng), không O(lịch sử) — đo ở LD-3 (docs/progress 2026-09-25).
 -#}
 {%- set cutoff = pipeline_cutoff() %}
+{%- set months = affected_month_list('sale', 'recorded_at', cutoff) %}
 
 WITH sales AS (
-    SELECT *
-    FROM {{ ref('stg_sale') }}
-    WHERE recorded_at < {{ cutoff }}
-    {%- if is_incremental() %}
-      AND toYYYYMM(occurred_at) IN ({{ affected_months(ref('stg_sale'), cutoff) }})
-    {%- endif %}
+    {{ latest_sales(cutoff, months) }}
 ),
 
 lines AS (
@@ -51,7 +50,13 @@ lines AS (
             s.subtotal = 0, 0,
             intDiv(toInt128(s.discount_tier + s.discount_promo) * l.line_total, s.subtotal)
         )) AS base_discount
-    FROM {{ ref('stg_sale_line') }} AS l
+    FROM (
+        -- Dòng hàng của ĐÚNG phiên bản đơn đã chọn (dòng con mang `recorded_at` của cha).
+        SELECT * EXCEPT (_dt, _source_file)
+        FROM {{ source('bronze', 'bronze_sale_line') }}
+        WHERE recorded_at < {{ cutoff }}{{ child_dt_filter('sale_line', months) }}
+          AND (sale_id, recorded_at) IN (SELECT sale_id, recorded_at FROM sales)
+    ) AS l
     INNER JOIN sales AS s ON s.sale_id = l.sale_id AND s.recorded_at = l.recorded_at
 ),
 

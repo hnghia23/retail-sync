@@ -84,6 +84,9 @@ class _StoreRun:
             "manager": f"{target.store_id}-mgr-01",
         }
         self.tokens: dict[str, str] = {}
+        #: Mở/đóng ca thử lại tối đa bao lâu khi cửa hàng tạm chết (`call_retrying`).
+        self.retry_attempts = 60
+        self.retry_delay = 1.0
         self.customers: dict[str, asyncio.Future[str | None]] = {}
         self.shift: _Shift | None = None
 
@@ -122,6 +125,24 @@ class _StoreRun:
             return r
         raise AssertionError("unreachable")
 
+    async def call_retrying(
+        self, path: str, body: dict[str, Any], *, role: str, endpoint: str
+    ) -> httpx.Response | None:
+        """Cho mở/đóng ca: cửa hàng tạm chết (test hỗn loạn — `kill -9` app hay Postgres) thì thu
+        ngân bấm lại cho tới khi được. `None` = hết lượt mà vẫn không tới được.
+
+        An toàn để lặp: mở ca lần hai trả `409 SHIFT_ALREADY_OPEN` kèm `shift_id` (xử lý ở
+        `open_shift`), đóng ca lần hai trả `409` — không bao giờ tạo ra ca thứ hai."""
+        for _ in range(self.retry_attempts):
+            try:
+                r = await self.call(path, body, role=role, endpoint=endpoint)
+            except httpx.HTTPError:
+                r = None
+            if r is not None and r.status_code < 500:
+                return r
+            await asyncio.sleep(self.retry_delay)
+        return None
+
     # ─────────────── Ca ───────────────
 
     def _today(self) -> str:
@@ -129,7 +150,11 @@ class _StoreRun:
 
     async def open_shift(self) -> None:
         body = {"business_date": self._today(), "opening_cash": self.opening_cash}
-        r = await self.call("/shifts/open", body, role="cashier", endpoint="shifts/open")
+        r = await self.call_retrying("/shifts/open", body, role="cashier", endpoint="shifts/open")
+        if r is None:
+            self.rec.rejected.append({"kind": "open_shift", "code": "UNREACHABLE"})
+            self.shift = None
+            return
         if r.status_code == 409 and _error_code(r) == "SHIFT_ALREADY_OPEN":
             # Ca còn mở từ trước lần chạy (hoặc lần chạy trước chết giữa chừng). Đóng nó để
             # bắt đầu sạch, và ghi lại — ca đó KHÔNG thuộc đáp án của lần chạy này.
@@ -149,9 +174,12 @@ class _StoreRun:
                         "code": _error_code(closed),
                     }
                 )
-            r = await self.call("/shifts/open", body, role="cashier", endpoint="shifts/open")
-        if r.status_code != 201:
-            self.rec.rejected.append({"kind": "open_shift", "code": _error_code(r)})
+            r = await self.call_retrying(
+                "/shifts/open", body, role="cashier", endpoint="shifts/open"
+            )
+        if r is None or r.status_code != 201:
+            code = "UNREACHABLE" if r is None else _error_code(r)
+            self.rec.rejected.append({"kind": "open_shift", "code": code})
             self.shift = None
             return
         data = r.json()
@@ -169,21 +197,24 @@ class _StoreRun:
             return
         await asyncio.gather(*shift.tasks)
         counted = shift.record.opening_cash + shift.record.cash_from_sales
-        r = await self.call(
+        r = await self.call_retrying(
             f"/shifts/{shift.record.shift_id}/close",
             {"counted_cash": counted},
             role="manager",
             endpoint="shifts/close",
         )
-        if r.status_code == 200:
+        if r is not None and r.status_code == 200:
             data = r.json()
             shift.record.closed = True
             shift.record.counted_cash = counted
             shift.record.expected_cash = data["expected_cash"]
             shift.record.variance = data["variance"]
         else:
+            # Kể cả `409` sau một lần mất kết nối (lần trước đã đóng mà mất phản hồi): không biết
+            # số két trung tâm tính ra, nên ca này không vào đáp án — bộ đối soát bỏ qua nó.
+            code = "UNREACHABLE" if r is None else _error_code(r)
             self.rec.rejected.append(
-                {"kind": "close_shift", "shift_id": shift.record.shift_id, "code": _error_code(r)}
+                {"kind": "close_shift", "shift_id": shift.record.shift_id, "code": code}
             )
         self.shift = None
 
@@ -220,6 +251,10 @@ class _StoreRun:
                 data = r.json()
                 customer_id = data["customer_id"]
                 self.rec.customers[data["customer_id"]] = {"created": bool(data["created"])}
+            elif r.status_code >= 500:
+                self.rec.unknown.append(
+                    {"kind": "customer", "intent": sale.intent_id, "error": str(r.status_code)}
+                )
             else:
                 self.rec.rejected.append(
                     {"kind": "customer", "intent": sale.intent_id, "code": _error_code(r)}
@@ -273,6 +308,19 @@ class _StoreRun:
                     "intent": sale.intent_id,
                     "shift_id": shift.record.shift_id,
                     "error": type(exc).__name__,
+                }
+            )
+            return
+        if r.status_code >= 500:
+            # Máy chủ chết GIỮA lúc chốt (CH-2 `kill -9` app, CH-3 `kill -9` Postgres): commit có
+            # thể đã xong mà phản hồi mất. `4xx` thì chắc chắn chưa ghi gì; `5xx` thì không biết.
+            # Xếp nhầm vào `rejected` là bộ đối soát thấy "đơn thừa" ở cửa hàng và báo DIVERGED.
+            self.rec.unknown.append(
+                {
+                    "kind": "sale",
+                    "intent": sale.intent_id,
+                    "shift_id": shift.record.shift_id,
+                    "error": str(r.status_code),
                 }
             )
             return

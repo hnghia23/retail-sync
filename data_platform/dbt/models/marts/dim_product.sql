@@ -21,5 +21,9 @@ UNION ALL
 SELECT
     {{ sk('product_id') }}, product_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
     toUInt8(1)
-FROM (SELECT DISTINCT product_id FROM {{ ref('stg_sale_line') }})
+FROM (
+    -- Một cột, DISTINCT, thẳng từ bronze — không qua `stg_sale_line` (khử trùng toàn bộ lịch sử).
+    SELECT DISTINCT product_id FROM {{ source('bronze', 'bronze_sale_line') }}
+    WHERE recorded_at < {{ loaded_until() }}
+)
 WHERE product_id NOT IN (SELECT product_id FROM {{ ref('stg_product') }})

@@ -2,8 +2,9 @@
 
 - `ingest_events_total{store_id, outcome}`: `event_duplicate_rate` = duplicate / tổng, tỉ lệ
   `rejected_*`. Ghi SAU commit (xem `ingest_batch`).
-- `ingest_batches_refused_total{reason}`: lô bị từ chối nguyên cả lô vì backpressure (`503`)
-  hoặc quá lớn (`413`) — thứ CH-6 (10 cửa hàng nối lại cùng lúc) phải thấy tăng rồi về 0.
+- `ingest_batches_refused_total{reason}`: lô bị từ chối nguyên cả lô — `overloaded` (`503`,
+  semaphore), `rate_limited` (`429`, một cửa hàng gửi quá nhanh) hoặc `too_large` (`413`). Thứ
+  CH-6 (10 cửa hàng nối lại cùng lúc) phải thấy tăng rồi về 0.
 
 Độ trễ của request không ở đây: instrumentation FastAPI đã đo
 (`http_server_request_duration_seconds{http_route="/api/v1/events"}`, xem `shared.metrics`).

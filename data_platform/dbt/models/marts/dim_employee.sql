@@ -1,7 +1,11 @@
 {{ config(order_by='employee_key') }}
 -- Không lương, không password_hash (bronze vốn không có). Inferred member như dim_store.
+-- Tập "đã thấy trong giao dịch" đọc THẲNG một cột ở bronze (DISTINCT, bộ nhớ cỡ số khóa),
+-- không qua `stg_sale`: khử trùng toàn bộ lịch sử mỗi giờ chỉ để lấy một tập khóa là thứ LD-3
+-- (2026-09-25) cho thấy không chịu nổi ở T2. Khóa này không đổi giữa các phiên bản của đơn.
 WITH seen AS (
-    SELECT employee_id FROM {{ ref('stg_sale') }}
+    SELECT DISTINCT employee_id FROM {{ source('bronze', 'bronze_sale') }}
+    WHERE recorded_at < {{ loaded_until() }}
     UNION DISTINCT SELECT opened_by_employee_id FROM {{ ref('stg_shift') }}
     UNION DISTINCT
     SELECT assumeNotNull(closed_by_employee_id)

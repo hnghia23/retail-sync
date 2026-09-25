@@ -39,49 +39,60 @@ models:
       - name: shift_key
         data_tests: [unique, not_null]
 
+# Test trên FACT chỉ xét cửa sổ gần (`test_window_days`, mặc định 35 ngày theo occurred_at):
+# DAG chạy test sau mỗi model MỖI GIỜ, và ở T2 một `GROUP BY sale_id, line_no` trên 256 triệu
+# dòng mỗi giờ là thứ LD-3 cho thấy không chịu nổi. Toàn bộ lịch sử: chạy định kỳ
+#   dbt test --vars '{test_window_days: 36500}'
   - name: fact_sale_line
     data_tests:
       - unique_columns:
           arguments:
             columns: [sale_id, line_no]
+          config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
     columns:
       - name: date_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_date'), field: date_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: store_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_store'), field: store_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: product_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_product'), field: product_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: employee_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_employee'), field: employee_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: customer_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_customer'), field: customer_key}
-              config: {where: "customer_key != 0"}
+              config: {where: "customer_key != 0 AND occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: shift_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_shift'), field: shift_key}
-              config: {where: "shift_key != 0"}
+              config: {where: "shift_key != 0 AND occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
 
   - name: fact_payment
     data_tests:
       - unique_columns:
           arguments:
             columns: [sale_id, seq]
+          config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
     columns:
       - name: store_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_store'), field: store_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: method
         data_tests:
           - accepted_values:  # = shared/types.py PaymentMethod
@@ -90,8 +101,13 @@ models:
   - name: fact_point_event
     columns:
       - name: event_id
-        data_tests: [unique, not_null]
+        data_tests:
+          - unique:
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
+          - not_null:
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}
       - name: customer_key
         data_tests:
           - relationships:
               arguments: {to: ref('dim_customer'), field: customer_key}
+              config: {where: "occurred_at >= now64(6) - toIntervalDay({{ var('test_window_days', 35) }})"}

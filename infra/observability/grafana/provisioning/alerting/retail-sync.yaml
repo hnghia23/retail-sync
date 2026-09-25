@@ -1,7 +1,7 @@
 # Ngưỡng cảnh báo docs/08 §5 + docs/17 §6 — provision vào Grafana của otel-lgtm lúc khởi động.
-# SINH TỪ SCRIPT, cùng khuôn cho mọi rule; sửa ngưỡng ở đây thì sửa cả docs/08 §5.
-# Không có rule cho độ tươi / "cửa hàng không thấy": ngoài giờ bán chúng tăng là bình thường —
-# cần lịch giờ mở cửa trước. Chưa có contact point: cảnh báo hiện ở Grafana → Alerting.
+# SINH TỪ infra/observability/build_alerts.py — sửa ở đó (và docs/08 §5), không sửa tay file này.
+# Không có rule cho độ tươi: ngoài giờ bán nó tăng là bình thường — cần lịch giờ mở cửa trước.
+# Thông báo: webhook → alert-sink (compose) ghi lại mọi lần kêu/hết kêu.
 # (YAML là tập cha của JSON: file này là JSON để không cần thư viện YAML khi sinh.)
 {
   "apiVersion": 1,
@@ -941,8 +941,409 @@
             "summary": "Bộ giám sát mất nguồn hoặc không chạy",
             "description": "flow-monitor không đọc được Postgres trung tâm/lake/ClickHouse — hoặc không chạy (không có dữ liệu cũng báo)."
           }
+        },
+        {
+          "uid": "rs-store-disk",
+          "title": "Đĩa cửa hàng > 75%",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(disk_used_ratio)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.75
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "1m",
+          "labels": {
+            "severity": "critical",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Đĩa cửa hàng > 75%",
+            "description": "disk_used_pct (docs/08 §5): đầy đĩa là rủi ro chí tử ở cửa hàng (log, dữ liệu lịch sử). Phải tới TRƯỚC lần ghi đầu tiên lỗi (CH-4)."
+          }
+        },
+        {
+          "uid": "rs-db-pool",
+          "title": "Pool kết nối DB > 80%",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(db_pool_used_ratio)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.8
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Pool kết nối DB > 80%",
+            "description": "db_connections_used (docs/08 §5): request sắp phải chờ kết nối; độ trễ tăng trước khi có lỗi."
+          }
+        },
+        {
+          "uid": "rs-central-pg-conn",
+          "title": "Postgres trung tâm: kết nối > 70% max_connections",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(pg_connections_used_ratio)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.7
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "1m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Postgres trung tâm: kết nối > 70% max_connections",
+            "description": "pg_connections_used (docs/08 §5): chạm trần là mọi kết nối mới bị từ chối — cần PgBouncer (docs/02 §4, LD-4)."
+          }
+        },
+        {
+          "uid": "rs-circuit-open",
+          "title": "Cửa hàng mất kết nối trung tâm > 10 phút",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(min_over_time(sync_consecutive_failures[10m]))",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Cửa hàng mất kết nối trung tâm > 10 phút",
+            "description": "circuit_breaker_state (docs/08 §5): mọi lần gửi (cả heartbeat) lỗi đường truyền suốt 10 phút. Cửa hàng vẫn bán (tự chủ); dữ liệu dồn ở outbox."
+          }
+        },
+        {
+          "uid": "rs-reconcile-full",
+          "title": "Quét toàn bộ INV-4 không chạy > 35 ngày",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(reconcile_full_last_run_age_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        3024000
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Quét toàn bộ INV-4 không chạy > 35 ngày",
+            "description": "docs/08 §4.2: lượt tăng dần bỏ qua khách không còn giao dịch; chỉ lần quét toàn bộ (mỗi 30 ngày, 01-05 giờ cửa hàng) bắt được snapshot hỏng của họ. Không có dữ liệu = chưa quét lần nào cũng báo."
+          }
+        },
+        {
+          "uid": "rs-store-silent",
+          "title": "Cửa hàng im lặng > 1 giờ",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(store_last_seen_age_seconds{watched=\"1\"})",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        3600
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Cửa hàng im lặng > 1 giờ",
+            "description": "stores_not_seen_recently (docs/08 §5): worker gửi heartbeat mỗi 5 phút khi rảnh, nên im lặng 1 giờ = worker/mạng/máy cửa hàng đã chết. Chỉ cửa hàng watched (FLOW_MONITOR_WATCH_STORES)."
+          }
         }
       ]
+    }
+  ],
+  "contactPoints": [
+    {
+      "orgId": 1,
+      "name": "retail-sync-webhook",
+      "receivers": [
+        {
+          "uid": "rs-webhook",
+          "type": "webhook",
+          "settings": {
+            "url": "http://alert-sink:8080/alert",
+            "httpMethod": "POST"
+          },
+          "disableResolveMessage": false
+        }
+      ]
+    }
+  ],
+  "policies": [
+    {
+      "orgId": 1,
+      "receiver": "retail-sync-webhook",
+      "group_by": [
+        "alertname"
+      ],
+      "group_wait": "10s",
+      "group_interval": "1m",
+      "repeat_interval": "4h"
     }
   ]
 }

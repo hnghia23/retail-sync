@@ -50,11 +50,13 @@ log = logging.getLogger(__name__)
 METRICS: dict[str, str] = {
     # S3 — trung tâm nhận sự kiện
     "store_sync_lag_seconds": "recorded_at - occurred_at của lô gần nhất, theo cửa hàng",
-    "store_last_seen_age_seconds": "Thời gian từ lần cuối cửa hàng gửi được sự kiện",
+    "store_last_seen_age_seconds": "Thời gian từ lần cuối cửa hàng liên lạc (lô hay heartbeat)",
     "dead_letter_events": "Sự kiện trung tâm đã vứt vào dead-letter, theo cửa hàng",
     "reconcile_drift_count": "Lệch INV-4 (số dư ≠ Σ sổ cái) đang mở — nghiêm trọng nhất",
     "reconcile_last_run_age_seconds": "Thời gian từ lần đối soát INV-4 cuối",
+    "reconcile_full_last_run_age_seconds": "Thời gian từ lần QUÉT TOÀN BỘ INV-4 cuối",
     "point_ledger_partition_months_ahead": "Tháng partition point_ledger tạo sẵn (< 2 = nguy)",
+    "pg_connections_used_ratio": "Kết nối client / max_connections của Postgres trung tâm",
     # S4 — trích xuất
     "pipeline_extract_horizon_lag_seconds": "now - extract_horizon(): lớn = transaction treo",
     "pipeline_extract_watermark_age_seconds": "now - mép cuối file bronze cuối, theo bảng",
@@ -76,6 +78,7 @@ METRICS: dict[str, str] = {
 FRESHNESS_LOOKBACK_DAYS = 35
 
 _RECONCILE_JOB = "point_balance_vs_ledger"  # central.ops.reconcile.JOB_NAME (không import được)
+_RECONCILE_FULL_JOB = "point_balance_vs_ledger:full"  # central.ops.reconcile.FULL_JOB_NAME
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +157,16 @@ async def _central(health: FlowHealth, cfg: PipelineConfig) -> None:
                 # Sự kiện mới nhất của cửa hàng đã tới trung tâm = độ tươi L2 (docs/17 §3).
                 age = health.age(r["last_event_at"])
                 health.add("flow_freshness_seconds", age, layer="L2", store_id=store)
-            health.add("store_last_seen_age_seconds", health.age(r["updated_at"]), store_id=store)
+            # `watched`: cửa hàng mà cảnh báo "im lặng" phải canh (docs/08 §5
+            # `stores_not_seen_recently`). Mặc định mọi cửa hàng; stack dev chỉ định 3 cửa hàng
+            # thật, vì cửa hàng ẢO của bộ giả lập im lặng là bình thường sau mỗi lần chạy.
+            watched = "1" if not cfg.watch_stores or store in cfg.watch_stores else "0"
+            health.add(
+                "store_last_seen_age_seconds",
+                health.age(r["updated_at"]),
+                store_id=store,
+                watched=watched,
+            )
 
         for r in await conn.fetch(
             "SELECT COALESCE(store_id, 'unknown') AS store_id, count(*) AS n"
@@ -171,11 +183,25 @@ async def _central(health: FlowHealth, cfg: PipelineConfig) -> None:
         )
         if last_run is not None:
             health.add("reconcile_last_run_age_seconds", health.age(last_run))
+        last_full = await conn.fetchval(
+            "SELECT last_run_at FROM reconciliation_watermark WHERE job_name = $1",
+            _RECONCILE_FULL_JOB,
+        )
+        if last_full is not None:
+            health.add("reconcile_full_last_run_age_seconds", health.age(last_full))
 
         # Ràng buộc #2: hết partition = mọi sự kiện có điểm bị từ chối. View chỉ đọc catalog.
         ahead = await conn.fetchval("SELECT months_ahead FROM point_ledger_partition_health")
         if ahead is not None:
             health.add("point_ledger_partition_months_ahead", ahead)
+
+        # docs/08 §5 `pg_connections_used` > 70% → cần PgBouncer (docs/02 §4). Chỉ đếm kết nối
+        # của client: tiến trình nền (autovacuum, WAL writer...) không chiếm `max_connections`.
+        used = await conn.fetchval(
+            "SELECT count(*)::float8 / current_setting('max_connections')::float8"
+            " FROM pg_stat_activity WHERE backend_type = 'client backend'"
+        )
+        health.add("pg_connections_used_ratio", used)
 
         # Cùng hàm mà S4 dùng làm mép cửa sổ (docs/17 §4 bẫy 1). Trễ xa hơn `safety_lag` nghĩa
         # là có transaction mở lâu đang giữ trích xuất đứng lại — an toàn, nhưng phải thấy.

@@ -8,6 +8,9 @@
         --central http://localhost:8000 --days 3 --start-date 2026-08-30 --rate 1800 \\
         --quirks offline,resend,concurrent_customer
 
+    # Chế độ bulk: T2 24 tháng → Parquet bronze trên lake (bronze/bulk-t2), đo khối lượng (LD-3)
+    uv run python -m simulator bulk --profile t2 --months 24 --workers 6
+
     uv run python -m simulator audit --manifest runs/<run_id>/manifest.json \\
         --edge-dsn store-001=postgresql://edge_app:...@localhost:5433/edge_store_001 \\
         --central-dsn postgresql://central_app:...@localhost:5434/central --wait 120
@@ -25,7 +28,7 @@ import json
 import os
 import secrets
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -268,6 +271,169 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _lake_fs() -> Any:
+    """MinIO của compose, secret từ biến môi trường hoặc `infra/.env` (như mật khẩu nhân viên)."""
+    import pyarrow.fs as pafs
+
+    return pafs.S3FileSystem(
+        access_key=_env_value("MINIO_ROOT_USER") or "minioadmin",
+        secret_key=_env_value("MINIO_ROOT_PASSWORD"),
+        endpoint_override=os.environ.get("LAKE_ENDPOINT", "localhost:9000"),
+        scheme="http",
+        region="us-east-1",
+    )
+
+
+def _latest_snapshot(fs: Any, base: str, table: str) -> str | None:
+    import pyarrow.fs as pafs
+
+    infos = fs.get_file_info(pafs.FileSelector(f"{base}/{table}", allow_not_found=True))
+    parts = sorted(i.path for i in infos if i.type == pafs.FileType.Directory)
+    return f"{parts[-1]}/snapshot.parquet" if parts else None
+
+
+def _bulk_window(args: argparse.Namespace) -> tuple[date, date]:
+    """Mặc định: `--months` tháng trọn vẹn, kết thúc ở ngày cuối tháng trước."""
+    today = datetime.now(UTC).date()
+    end: date = args.end_date or (today.replace(day=1) - timedelta(days=1))
+    if args.start_date:
+        return args.start_date, end
+    months = max(1, args.months)
+    y, m = end.year, end.month - months + 1
+    while m <= 0:
+        y, m = y - 1, m + 12
+    return date(y, m, 1), end
+
+
+def _bulk(args: argparse.Namespace) -> int:
+    """Chế độ `bulk` (docs/18 §3): lịch sử nhiều tháng → Parquet bronze trên lake, để đo khối
+    lượng (LD-3, seam 50 triệu dòng ledger). Chạy lại cùng lệnh là an toàn: mảnh đã sinh và file
+    đã có trên lake đều được giữ nguyên."""
+    import time
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+    from dataclasses import asdict
+
+    import pyarrow.parquet as pq
+
+    from simulator.profile import load_profile
+    from simulator.sinks.bulk_parquet import (
+        SNAPSHOT_TABLES,
+        generate_store,
+        month_window,
+        months_between,
+        publish_month,
+    )
+
+    profile = load_profile(args.profile)
+    n_stores = args.stores or profile.stores
+    start, end = _bulk_window(args)
+    days = (end - start).days + 1
+    run_id = args.run_id or f"bulk-{profile.name}-{start:%Y%m}-{end:%Y%m}-s{args.seed}"
+    work: Path = args.work or (args.out / run_id / "work")
+    fs = None if args.no_publish else _lake_fs()
+    source = f"{args.bucket}/bronze/central"
+    prefix = args.lake_prefix or f"bronze/bulk-{profile.name}"
+    if prefix.strip("/") == "bronze/central":
+        raise SystemExit(
+            "bulk KHÔNG ghi vào bronze/central: dữ liệu đo khối lượng không lẫn vào lake thật"
+        )
+    target = f"{args.bucket}/{prefix.strip('/')}"
+
+    # Cửa hàng: N cửa hàng THẬT đầu tiên của master data (snapshot `store` trên lake thật), để
+    # dim_store của mart có tên, vùng... Chỉ sinh cục bộ (không lake) thì đặt tên tổng hợp.
+    store_ids = [f"bulk-{i:04d}" for i in range(1, n_stores + 1)]
+    if fs is not None and (snap := _latest_snapshot(fs, source, "store")):
+        with fs.open_input_file(snap) as f:
+            ids = sorted(pq.read_table(f, columns=["store_id"]).column("store_id").to_pylist())
+        if len(ids) < n_stores:
+            raise SystemExit(f"master data chỉ có {len(ids)} cửa hàng, cần {n_stores}")
+        store_ids = ids[:n_stores]
+
+    catalog = _catalog(args.crawl_data)
+    nonce = args.nonce if args.nonce is not None else args.seed
+    print(
+        f"run_id={run_id} bulk profile={profile.name} stores={n_stores} {start}..{end}"
+        f" ({days} ngày) workers={args.workers} → {target if fs else work}",
+        flush=True,
+    )
+    t0 = time.perf_counter()
+    stats: list[dict[str, Any]] = []
+    done_marker = work / "_generated.json"
+    if done_marker.exists():
+        stats = json.loads(done_marker.read_text(encoding="utf-8"))
+        print(f"bước 1: đã có ({len(stats)} cửa hàng) — bỏ qua", flush=True)
+    else:
+        with ProcessPoolExecutor(max_workers=args.workers) as pool:
+            futures = [
+                pool.submit(
+                    generate_store,
+                    profile,
+                    store_id=sid,
+                    prices=catalog,
+                    seed=args.seed,
+                    nonce=nonce,
+                    start_date=start,
+                    days=days,
+                    work=work,
+                )
+                for sid in store_ids
+            ]
+            for i, fut in enumerate(futures, start=1):
+                stats.append(asdict(fut.result()))
+                if i % 10 == 0 or i == len(futures):
+                    elapsed = time.perf_counter() - t0
+                    print(f"  bước 1: {i}/{len(futures)} cửa hàng, {elapsed:.0f}s", flush=True)
+        done_marker.write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
+    t1 = time.perf_counter()
+
+    published: dict[str, dict[str, int]] = {}
+    if fs is not None:
+        months = months_between(start, days)
+
+        def publish(month: str) -> dict[str, int]:
+            return publish_month(fs, work=work, month=month, base=target)
+
+        with ThreadPoolExecutor(max_workers=args.publish_workers) as threads:
+            for month, rows in zip(months, threads.map(publish, months), strict=True):
+                published[month] = rows
+                print(f"  bước 2: {month} {rows}", flush=True)
+        # Master data: bản chụp mới nhất của lake THẬT, đặt ở ngày đầu của cửa sổ đầu tiên.
+        first_dt = month_window(months[0])[0].date().isoformat()
+        for table in SNAPSHOT_TABLES:
+            snap = _latest_snapshot(fs, source, table)
+            if snap is None:
+                raise SystemExit(f"lake thật chưa có snapshot `{table}` — chạy pipeline một lần")
+            key = f"{target}/{table}/dt={first_dt}/snapshot.parquet"
+            fs.create_dir(key.rsplit("/", 1)[0], recursive=True)
+            fs.copy_file(snap, key)
+
+    totals = {
+        k: sum(int(s[k]) for s in stats)
+        for k in ("sales", "lines", "ledger", "customers", "shifts")
+    }
+    totals["total_vnd"] = sum(int(s["total"]) for s in stats)
+    report = {
+        "run_id": run_id,
+        "mode": "bulk",
+        "profile": profile.name,
+        "seed": args.seed,
+        "stores": n_stores,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "lake": target if fs else None,
+        "work": str(work),
+        "totals": totals,
+        "published": published,
+        "seconds": {"generate": round(t1 - t0, 1), "publish": round(time.perf_counter() - t1, 1)},
+    }
+    out = args.out / run_id / "bulk.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"totals": totals, "seconds": report["seconds"]}, ensure_ascii=False))
+    print(f"báo cáo: {out}")
+    return 0
+
+
 async def _audit(args: argparse.Namespace) -> int:
     from simulator.audit import ClickHouseTarget, audit, audit_until_settled
     from simulator.manifest import Manifest
@@ -389,6 +555,27 @@ def main(argv: list[str] | None = None) -> int:
         "--drain-timeout", type=float, default=600.0, help="giây chờ xả hết outbox sau khi bán xong"
     )
 
+    def day(value: str) -> date:
+        return datetime.strptime(value, "%Y-%m-%d").date()  # noqa: DTZ007 — chỉ lấy ngày
+
+    bulk = sub.add_parser("bulk", help="lịch sử nhiều tháng → Parquet bronze (docs/18 §3)")
+    bulk.add_argument("--profile", default="t2")
+    bulk.add_argument("--months", type=int, default=1, help="số tháng, kết thúc ở --end-date")
+    bulk.add_argument("--start-date", type=day, default=None, help="đè --months")
+    bulk.add_argument("--end-date", type=day, default=None, help="mặc định: hết tháng trước")
+    bulk.add_argument("--stores", type=int, default=0, help="mặc định: số cửa hàng của profile")
+    bulk.add_argument("--seed", type=int, default=42)
+    bulk.add_argument("--nonce", type=int, default=None)
+    bulk.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) // 2))
+    bulk.add_argument("--publish-workers", type=int, default=2)
+    bulk.add_argument("--bucket", default="lake")
+    bulk.add_argument("--lake-prefix", default="", help="mặc định bronze/bulk-<profile>")
+    bulk.add_argument("--no-publish", action="store_true", help="chỉ sinh mảnh cục bộ")
+    bulk.add_argument("--run-id", default=None)
+    bulk.add_argument("--out", type=Path, default=_REPO / "runs")
+    bulk.add_argument("--work", type=Path, default=None)
+    bulk.add_argument("--crawl-data", type=Path, default=_DEFAULT_CRAWL)
+
     aud = sub.add_parser("audit", help="đối soát manifest với các tầng")
     aud.add_argument("--manifest", type=Path, required=True)
     aud.add_argument("--edge-dsn", action="append", default=[], metavar="STORE_ID=DSN")
@@ -420,6 +607,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    if args.command == "bulk":
+        return _bulk(args)
     if args.command == "run":
         if args.mode == "virtual":
             return asyncio.run(_run_virtual(args))

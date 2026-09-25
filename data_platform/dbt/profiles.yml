@@ -17,3 +17,7 @@ retail_sync:
         # LEFT JOIN không khớp cho NULL như SQL chuẩn, thay vì giá trị mặc định ('' / 0) của
         # ClickHouse — '' lẫn vào tên vùng hay tên danh mục là dữ liệu sai trông như đúng.
         join_use_nulls: 1
+        # Sắp xếp / GROUP BY vượt ngưỡng thì tràn ra đĩa thay vì chết MEMORY_LIMIT_EXCEEDED
+        # (ClickHouse của compose chạy chung ~8 GB RAM với cả stack — LD-3, 2026-09-25).
+        max_bytes_before_external_sort: 2000000000
+        max_bytes_before_external_group_by: 2000000000

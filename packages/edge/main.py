@@ -28,7 +28,7 @@ from edge.web.auth import RequiresLoginError, requires_login_handler
 from edge.web.router import router as web_router
 from shared.db import make_engine, make_session_factory
 from shared.logs import setup_logging
-from shared.metrics import get_meter, setup_metrics
+from shared.metrics import get_meter, register_resource_gauges, setup_metrics
 from shared.tracing import instrument_clients, instrument_fastapi, setup_tracing
 
 _WEB_STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -47,6 +47,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         gauges.register(get_meter("edge.outbox"))
         refresher = asyncio.create_task(gauges.refresh_forever(app.state.session_factory))
+        register_resource_gauges(
+            get_meter("edge.resources"),
+            engine=engine,
+            attrs={"store_id": settings.store_id},
+            disk_path=settings.disk_path,
+        )
     try:
         yield
     finally:
