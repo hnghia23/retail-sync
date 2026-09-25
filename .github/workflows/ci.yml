@@ -60,3 +60,48 @@ jobs:
         with: { enable-cache: true }
       - run: uv sync --all-extras --dev
       - run: uv run pytest tests/integration
+
+  # docs/16 §6 — bắt buộc mỗi PR từ cổng A: AT-01…04, AT-07, AT-10, DI-1…3 trên COMPOSE THẬT, dữ
+  # liệu do bộ giả lập sinh, đạt = `simulator audit` CONVERGED. Máy CI dùng một lần, nên test được
+  # phép làm điều không ai làm trên máy dev đang chạy việc khác: tắt Central API (AT-02).
+  #
+  # Dữ liệu master là bộ TỔNG HỢP `tests/fixtures/crawl_data/`: `crawl_data/` thật không nằm trong
+  # git. Stack dựng bằng đúng lệnh mà máy dev dùng sau `git clone` (`infra/bootstrap.py`), nên job
+  # này cũng giữ cho đường "clone → chạy được" (cổng B, docs/06) không mục.
+  scenarios:
+    name: scenarios (compose thật + bộ giả lập)
+    runs-on: ubuntu-latest
+    needs: [unit, integration]
+    timeout-minutes: 60
+    env:
+      RETAIL_SYNC_SCENARIOS: "1"
+      RETAIL_SYNC_CRAWL_DATA: tests/fixtures/crawl_data
+      COMPOSE: >-
+        docker compose -f infra/compose.yaml --profile edge --profile edge-multi
+        --profile central --profile data --profile observability
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --all-extras --dev
+
+      # Tạo infra/.env từ .env.example (giá trị dev, máy dùng một lần), migrate, seed, cấp khóa,
+      # init lake, chờ DAG. Mật khẩu nhân viên sinh ngẫu nhiên vào infra/.env.
+      - name: dựng stack (infra/bootstrap.py)
+        run: uv run python infra/bootstrap.py --crawl-data tests/fixtures/crawl_data
+
+      - name: tests/scenarios
+        run: uv run pytest tests/scenarios -v
+
+      # Bộ giám sát luồng đọc đủ 3 nguồn trên stack thật (mã thoát 1 nếu nguồn nào lỗi). Chạy
+      # một lần trong mạng compose: không cần otel-lgtm, không in secret.
+      - name: pipeline health (docs/17 §6)
+        run: $COMPOSE run --rm --no-deps --entrypoint python flow-monitor -m pipeline health
+
+      - name: log compose khi đỏ
+        if: failure()
+        run: $COMPOSE logs --no-color --tail 200
+
+      - name: dọn
+        if: always()
+        run: $COMPOSE down -v --remove-orphans

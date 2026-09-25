@@ -18,7 +18,17 @@ tests/
 │   ├── test_auth_domain.py      # ✅ xếp hạng vai trò cho require_role()
 │   ├── test_login.py            # ✅ use case Login bằng fake
 │   ├── test_seed_data.py        # ✅ parser crawl_data/ — mã trùng, barcode trùng
-│   └── test_tracing.py          # ✅ OTel: idempotent qua nhiều lần create_app(), inject/link W3C
+│   ├── test_tracing.py          # ✅ OTel: idempotent qua nhiều lần create_app(), inject/link W3C
+│   ├── test_sync_client.py      # ✅ mọi lỗi cấp request → lỗi đường truyền; Retry-After; jitter
+│   ├── test_pii.py              # ✅ chuẩn hóa SĐT VN (mọi cách viết → một hash), HMAC có khóa, lỗi không lộ số
+│   ├── test_shifts.py           # ✅ mở/đóng ca bằng fake: business_date theo giờ cửa hàng, variance ghi nguyên trạng
+│   ├── test_simulator_generator.py # ✅ bộ sinh: tái lập theo seed, phân bố khớp profile, không đơn nào lúc giao ca
+│   ├── test_simulator_virtual.py   # ✅ tật, đồng hồ tổng hợp, file khóa, import THUẦN (không kéo DB/FastAPI),
+│   │                               #    audit thử lại khi đứt kết nối ClickHouse
+│   ├── test_console.py          # ✅ 6 CLI in được tiếng Việt khi stdout không phải UTF-8 (Windows cp1252)
+│   ├── test_migrations.py       # ✅ ID revision ≤ 32 ký tự (`alembic_version.version_num`)
+│   ├── test_ingest_classification.py  # ✅ SQLSTATE → retryable/dead-letter; không lộ input vào lý do lỗi
+│   └── test_loyalty_defaults.py # ✅ quy tắc hạng/tích điểm mặc định edge == central (không import chéo được)
 ├── integration/              # testcontainers — Postgres/Redis/ClickHouse thật
 │   ├── test_edge_schema.py      # ✅ bất biến DB cửa hàng: INV-1/2/3, trả hàng, ca, outbox
 │   ├── test_central_schema.py   # ✅ partition point_ledger tự tạo, idempotency gate
@@ -26,29 +36,53 @@ tests/
 │   ├── test_auth_http.py        # ✅ FastAPI thật: login, require_role, chống giả mạo employee_id
 │   ├── test_web_ui.py           # ✅ UI POS qua HTTP thật: đăng nhập, mở ca, quét, thanh toán
 │   ├── test_seed.py             # ✅ central.ops.seed / edge.ops.seed trên Postgres thật
-│   ├── test_sync_worker.py      # outbox → central, idempotency
-│   └── test_reconciliation.py   # DI-1: balance = SUM(ledger.delta)
-└── scenarios/                # kịch bản end-to-end, nhiều service thật (compose)
-    ├── test_at.py                # AT-01 .. AT-10
-    ├── test_chaos.py              # CH-1 .. CH-7
-    ├── test_load.py               # LD-1 .. LD-4 (k6, chạy riêng, không pytest)
-    └── test_data_integrity.py     # DI-1 .. DI-5
+│   ├── test_sync_pipeline.py    # ✅ place_sale → outbox → worker → POST /events thật: AT-01/02/03/04,
+│   │                            #    CH-7, C03, backpressure, dead-letter, chống giả cửa hàng
+│   ├── test_customers_shifts.py # ✅ POST /customers (chỉ hash, trùng SĐT nhiều cách viết, 8 quầy đồng thời),
+│   │                            #    /shifts/open|close (409 kèm shift_id, chỉ đếm TIỀN MẶT, race đóng ca ↔ chốt đơn)
+│   ├── test_reconciliation.py   # ✅ DI-1/INV-4 tăng dần: lệch được lưu tới khi sửa, `--full` thấy cái
+│   │                            #    tăng dần bỏ qua (đánh đổi có chủ đích của ràng buộc #8)
+│   ├── test_extract_watermarks.py # ✅ bẫy 1 (commit muộn KHÔNG lọt, `extract_horizon()`, thiếu quyền → từ chối,
+│   │                              #    `transaction_timeout` cắt thật), bẫy 2 (index mọi partition), bẫy 3 (trigger)
+│   ├── test_clickhouse_bronze.py  # ✅ bẫy 4 trên ClickHouse thật: mọi bảng có cửa sổ khử trùng, chạy lại không
+│   │                              #    nhân đôi, token phải có hash, cửa sổ có hạn, dựng lại bằng DROP PARTITION
+│   ├── test_pipeline.py         # ✅ S4+S5 trên PG + MinIO + ClickHouse thật: mọi dòng tới bronze, chạy lại
+│   │                            #    không nhân đôi, mất nhật ký nạp vẫn không nhân đôi, dựng lại từ lake,
+│   │                            #    dòng commit muộn không lọt, UPDATE → phiên bản mới + file cũ bất biến,
+│   │                            #    đổi độ dài cửa sổ không chồng lấn, bảng rỗng có file mốc, một lượt mỗi lúc (lock)
+│   ├── test_dbt_marts.py        # ✅ dbt THẬT trên ClickHouse thật: khớp tới từng đồng, bẫy 5 (tháng bị ảnh hưởng),
+│   │                            #    nạp dở dang, phiên bản mới nhất, bronze nhân đôi → đỏ, inferred member, ca đang mở
+│   ├── test_simulator_virtual.py # ✅ cửa hàng ảo + 3 tật trên Central API thật → CONVERGED; đối chứng mất đơn
+│   ├── test_simulator_edge.py   # ✅ bộ giả lập vào Edge API thật → worker → Central thật → pipeline → dbt → audit:
+│   │                            #    L0 = L1 = L2 = L3 = L4; mất đơn ở trung tâm / bronze / mart → DIVERGED
+│   └── test_bulk_schema.py      # ⏳ B: schema Parquet của bulk == schema bước trích xuất ghi ra
+└── scenarios/                # end-to-end trên compose thật, NGUỒN DỮ LIỆU = BỘ GIẢ LẬP
+    ├── conftest.py               # ✅ OPT-IN (RETAIL_SYNC_SCENARIOS=1, `make test-scenarios`): đổi trạng thái compose
+    ├── test_at.py                # ✅ AT-01..04 (A) · AT-06 (A-Should) · AT-05, 09 (C)
+    ├── test_chaos.py              # ⏳ CH-1 .. CH-7 (B)
+    ├── test_load.py               # ⏳ LD-1 .. LD-4 (B) — chạy bộ giả lập, đọc báo cáo p95 của nó
+    ├── test_soak.py               # ⏳ test ngâm 72h (B) — `audit` định kỳ, không bao giờ DIVERGED
+    └── test_data_integrity.py     # ✅ AT-07, AT-10, DI-1..3 · DI-4/5 = một lần `simulator audit` (17 §5)
 ```
+
+**Điều kiện đạt chung của mọi test trong `scenarios/`:** sau kịch bản, `simulator audit` trả
+`CONVERGED` trong thời hạn hội tụ của kịch bản đó ([18 §6](18-simulator.md)). Riêng từng kịch
+bản thì cộng thêm tiêu chí của nó (p95, thời gian hội tụ...).
 
 ## 2. Kịch bản nghiệp vụ (AT) → test
 
-| # | File · hàm | Cần hạ tầng |
-|---|---|---|
-| AT-01 | `test_at.py::test_normal_sale_with_known_customer` | edge stack |
-| AT-02 | `test_at.py::test_offline_then_reconnect_ten_sales` | edge + central, `docker network disconnect` |
-| AT-03 | `test_at.py::test_duplicate_sync_event_five_times` | edge + central |
-| AT-04 | `test_at.py::test_concurrent_purchase_two_stores` | 2× edge + central |
-| AT-05 | `test_at.py::test_new_store_pulls_existing_balance` | edge + central |
-| AT-06 | `test_at.py::test_return_reverses_points` | edge |
-| AT-07 | `test_data_integrity.py::test_pipeline_idempotent_on_rerun` | data platform |
-| AT-08 | `test_chaos.py::test_redis_down_sale_still_works` | edge, tắt Redis |
-| AT-09 | `test_at.py::test_tier_upgrade_applies_next_sale` | edge + central |
-| AT-10 | `test_data_integrity.py::test_ledger_matches_balance` | central |
+| # | File · hàm | Cần hạ tầng | Giai đoạn |
+|---|---|---|---|
+| AT-01 | `test_at.py::test_normal_sale_with_known_customer` | edge stack + bộ giả lập `edge` | A |
+| AT-02 | `test_at.py::test_offline_then_reconnect_ten_sales` | edge + central, `docker network disconnect` | A |
+| AT-03 | `test_at.py::test_duplicate_sync_event_five_times` | edge + central | A |
+| AT-04 | `test_at.py::test_concurrent_purchase_two_stores` | central + bộ giả lập `virtual` (2 cửa hàng ảo cùng bán cho một khách cùng lúc). Ở chế độ `edge`, cửa hàng 2 chưa biết được khách của cửa hàng 1 — tra khách qua trung tâm là AT-05, giai đoạn C | A |
+| AT-05 | `test_at.py::test_new_store_pulls_existing_balance` | edge + central | C |
+| AT-06 | `test_at.py::test_return_reverses_points` | edge + central | A — Should |
+| AT-07 | `test_data_integrity.py::test_pipeline_idempotent_on_rerun` | toàn luồng + data platform: DAG hai lần liên tiếp, số và **tên part** của fact không đổi | A |
+| AT-08 | `test_chaos.py::test_redis_down_sale_still_works` | edge, tắt Redis | B |
+| AT-09 | `test_at.py::test_tier_upgrade_applies_next_sale` | edge + central | C |
+| AT-10 | `test_data_integrity.py::test_ledger_matches_balance` | central: `central.ops.reconcile --full`, drift = 0 | A |
 
 ## 3. Kịch bản hỗn loạn (CH) → test
 
@@ -62,22 +96,22 @@ tests/
 | CH-6 | `test_chaos.py::test_ten_stores_reconnect_simultaneously` | 10× edge container, đồng loạt `network connect` |
 | CH-7 | `test_chaos.py::test_resend_batch_ten_times` | gọi lại `POST /events` cùng payload |
 
-## 4. Kịch bản tải (LD) → k6 script
+## 4. Kịch bản tải (LD) → bộ giả lập
 
-Không dùng pytest — dùng `k6` (đã chọn ở [08-reliability-and-scale §6.3](08-reliability-and-scale.md)).
+Không dùng `k6` (đổi 2026-09-23, lý do ở [18 §9](18-simulator.md)). Mỗi LD là **một lệnh bộ
+giả lập + một ngưỡng**. `test_load.py` chạy lệnh đó rồi đọc báo cáo JSON của bộ giả lập.
 
-```
-tests/load/
-├── ld1_single_store_peak.js
-├── ld2_ten_stores_sync.js
-├── ld3_warehouse_query_t2.js
-└── ld4_two_hundred_connections.js
-```
+| # | Lệnh (rút gọn) | Đạt khi |
+|---|---|---|
+| LD-1 | `run --mode edge --stores 1 --rate x50` | p95 `POST /sales` < 500 ms, bộ giả lập < 50% CPU |
+| LD-2 | `run --mode virtual --stores 200 --rate x10` | p95 `POST /events` < 1 s, 503 có `Retry-After`, `audit` hội tụ |
+| LD-3 | `bulk --profile t2 --months 24` rồi bộ truy vấn lớp C | Mỗi truy vấn < 3 s |
+| LD-4 | `run --mode virtual --stores 200 --connections 200` | Không lỗi, hoặc 503 tử tế |
 
-Chạy với và không có OpenTelemetry bật để đo overhead (bắt buộc theo [ADR-009](adr/009-observability-stack.md)):
+Chạy LD-1 với và không có OpenTelemetry bật để đo overhead (bắt buộc theo [ADR-009](adr/009-observability-stack.md)):
 ```bash
-k6 run tests/load/ld1_single_store_peak.js --env OTEL=off
-k6 run tests/load/ld1_single_store_peak.js --env OTEL=on
+OTEL_SDK_DISABLED=true  uv run python -m simulator run --mode edge --stores 1 --rate x50 --duration 15m
+OTEL_SDK_DISABLED=false uv run python -m simulator run --mode edge --stores 1 --rate x50 --duration 15m
 ```
 
 ## 5. Toàn vẹn dữ liệu (DI) → test
@@ -90,16 +124,51 @@ k6 run tests/load/ld1_single_store_peak.js --env OTEL=on
 | DI-4 | Số dòng bronze = số dòng warehouse theo phân vùng | `test_data_integrity.py::test_warehouse_row_count_matches_bronze` |
 | DI-5 | Mọi `sale` cửa hàng có mặt ở trung tâm sau ≤ 1h | `test_data_integrity.py::test_sale_replicated_within_sla` |
 
+Cả năm DI là các ô của **bảng đối soát xuyên tầng** ([17 §5](17-data-flow.md)), nên một lần
+`simulator audit` kiểm tất cả. Các hàm ở trên chỉ là cách gọi tên từng ô khi test đỏ.
+
 ## 6. Ngưỡng "xanh" cho CI
 
 | Loại | Chạy khi nào | Bắt buộc pass để merge? |
 |---|---|---|
 | `unit/` | Mọi commit (pre-commit + CI) | ✅ Có |
 | `integration/` | Mọi PR | ✅ Có |
-| `scenarios/test_at.py` | Mọi PR | ✅ Có |
-| `scenarios/test_chaos.py`, `test_load` (k6) | Trước khi merge vào `main` từ nhánh tuần 4, và theo lịch hằng tuần sau đó | ⚠️ Không chặn PR nhỏ, nhưng bắt buộc trước khi coi "cổng tuần 4" đạt |
+| `simulator/` | Mọi commit | ✅ Có |
+| `scenarios/test_at.py`, `test_data_integrity.py` | Mọi PR | ✅ Có (từ cổng A). **Job CI `scenarios`** (2026-09-25): `infra/bootstrap.py` dựng compose từ con số 0 trên dữ liệu tổng hợp `tests/fixtures/crawl_data/`, rồi `pytest tests/scenarios` + `pipeline health` |
+| `scenarios/test_chaos.py`, `test_load.py`, `test_soak.py` | Trước khi coi cổng B đạt, và theo lịch hằng tuần sau đó | ⚠️ Không chặn PR nhỏ, nhưng bắt buộc cho cổng B |
+
+> **Tiến độ AT (2026-09-23):** AT-01, AT-02, AT-03 và phần trung tâm của AT-04 đã có test ở
+> mức tích hợp (`tests/integration/test_sync_pipeline.py`) — Postgres thật + Central API thật
+> qua ASGI, chưa phải compose. AT-02 đã chạy thêm một lần tay trên compose thật (tắt
+> `central-api`, bán 3 đơn, bật lại → lên đủ, `attempts` = 0). ✅ **2026-09-24:** `scenarios/test_at.py`
+> + `test_data_integrity.py` chạy trên compose thật bằng bộ giả lập — xem
+> [progress/2026-09-24-cong-a.md](progress/2026-09-24-cong-a.md).
+
+**Chạy `tests/scenarios/` trên một stack khác stack dev** (CI, hay một project compose riêng để không
+đụng dữ liệu đang có): cùng bộ test, đổi bằng biến môi trường —
+`RETAIL_SYNC_COMPOSE_PROJECT` (tiền tố tên container), `RETAIL_SYNC_ENV_FILE` (secret + khóa),
+`RETAIL_SYNC_VIRTUAL_KEYS`, `RETAIL_SYNC_CRAWL_DATA`. Ví dụ dựng stack thử song song với nguồn
+riêng: `uv run python infra/bootstrap.py --project retail-sync-ci --env-file runs/ci.env
+--virtual-keys runs/ci-virtual-keys.env --crawl-data tests/fixtures/crawl_data` (cổng host trùng
+stack dev — dừng stack dev trước).
 
 ---
+*Changelog: 2026-09-25 (lần 2) — §6: job CI `scenarios` + `infra/bootstrap.py` + biến chọn stack.*
+
+*Changelog: 2026-09-25 — §1 theo file thật (`test_dbt_marts.py`, `test_simulator_virtual.py` ×2,
+`test_console.py`, `test_simulator_edge.py` tới L4); `scenarios/` đánh dấu ✅/⏳; §2 AT-04 bằng
+chế độ `virtual`; §6 kịch bản compose hiện chạy tay.*
+
+*Changelog: 2026-09-23 (lần 3) — thêm `test_extract_watermarks.py`, `test_clickhouse_bronze.py`
+(bẫy 1–4). Fixture `clickhouse` ở `tests/integration/conftest.py` dùng cùng image với compose.*
+
+*Changelog: 2026-09-23 (lần 2) — theo [ADR-010](adr/010-data-flow-first.md): cột giai đoạn cho AT;
+`scenarios/` lấy dữ liệu từ bộ giả lập, đạt = `audit` `CONVERGED`; thêm test cho S4/S5 và 5 bẫy
+ở docs/17 §4; LD chạy bằng bộ giả lập thay `k6`; thêm `test_soak.py`.*
+
+*Changelog: 2026-09-23 — thêm `test_sync_pipeline.py` (thay tên `test_sync_worker.py` dự kiến:
+nó kiểm cả hai đầu của đường đồng bộ, không riêng worker) và 3 file unit.*
+
 *Changelog: 2026-09-17 — đánh dấu các file test đã viết; gộp `test_partition_autocreate.py`
 vào `test_central_schema.py` (cùng cơ chế, tách file chỉ làm hai chỗ cùng dựng container).*
 

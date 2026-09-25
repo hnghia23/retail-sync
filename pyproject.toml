@@ -46,6 +46,12 @@ dev = [
     "pytest-cov>=6.0",
     "testcontainers[postgres,redis]>=4.8",
     "anyio>=4.6",
+    { include-group = "pipeline" },
+]
+# Chặng S4/S5 (`packages/pipeline`, docs/17). Nhóm riêng để image edge/central không phải kéo
+# pyarrow (~40 MB) mà chúng không dùng. Image Airflow cài qua data_platform/requirements.txt.
+pipeline = [
+    "pyarrow>=18.0",
 ]
 # Dependency của nền tảng dữ liệu nằm ở data_platform/requirements.txt (image Airflow ghim
 # constraint rất chặt; trộn chung sẽ kéo tụt version FastAPI/SQLAlchemy ở edge).
@@ -55,8 +61,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# `packages/` là thư mục gốc import — top-level: shared, edge, central
-packages = ["packages/shared", "packages/edge", "packages/central"]
+# `packages/` là thư mục gốc import — top-level: shared, edge, central, simulator
+packages = [
+    "packages/shared", "packages/edge", "packages/central", "packages/simulator", "packages/pipeline",
+]
 
 [tool.uv]
 package = true
@@ -94,14 +102,21 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106", "S107", "S311"]
 "packages/*/migrations/versions/*" = ["E501"]
+# Pipeline ghép SQL từ đặc tả bảng khai báo trong code (`pipeline/tables.py`) và giá trị do
+# chính nó sinh (đường dẫn file, token) qua `clickhouse.quote()` — không có đầu vào người dùng.
+"packages/pipeline/*" = ["S608"]
+# Script vận hành: việc của nó là gọi docker/alembic/lệnh ops cố định qua tiến trình con.
+"infra/bootstrap.py" = ["S603", "S607"]
+# Bộ đối soát ghép SQL ClickHouse từ UUID đã qua `uuid.UUID()` và store_id đã lọc dấu nháy.
+"packages/simulator/audit.py" = ["S608"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["shared", "edge", "central"]
+known-first-party = ["shared", "edge", "central", "simulator", "pipeline"]
 
 # ───────────────────────────── mypy ─────────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["packages", "tests"]
+files = ["packages", "tests", "infra/bootstrap.py"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
@@ -118,7 +133,7 @@ ignore_missing_imports = true
 # của chúng và báo "no-untyped-call" ở chế độ strict — `ignore_missing_imports` không tắt
 # được lỗi này (nó chỉ tắt lỗi "không tìm thấy stub"). `follow_imports = "skip"` buộc mypy
 # coi cả cây import là `Any`, đúng ý định: các gói instrumentation không phải code của ta.
-module = ["opentelemetry.*"]
+module = ["opentelemetry.*", "pyarrow.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 

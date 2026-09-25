@@ -8,8 +8,80 @@ kèm tầng phân tích trung tâm.
 Thiết kế v2 **đã hoàn tất**; đang **viết code v2** trong `packages/`.
 **Tuần 1 ([lộ trình](docs/06-roadmap.md)) đã đóng cổng (2026-09-18)** — xem tổng kết ở
 [docs/progress/2026-09-18-tong-ket-tuan-1.md](docs/progress/2026-09-18-tong-ket-tuan-1.md)
-(đã làm gì, đã kiểm chứng ra sao, demo được gì, còn thiếu gì). Đang ở **đầu tuần 2**
-(Loyalty + Ledger + Đồng bộ + Báo cáo vận hành).
+(đã làm gì, đã kiểm chứng ra sao, demo được gì, còn thiếu gì). Từ 2026-09-23 lộ trình đi theo
+giai đoạn A/B/C (ADR-010) thay cho tuần 2–4. Giai đoạn A: **luồng S1 → S6 chạy hết trên
+compose**. **🚪 Cổng A ĐẠT (2026-09-24)**, cả 8 điều kiện kiểm trên compose thật, xem
+[docs/progress/2026-09-24-cong-a.md](docs/progress/2026-09-24-cong-a.md). **Giai đoạn B** đang chạy
+([06](docs/06-roadmap.md)): ✅ dashboard "sức khỏe luồng" (2026-09-25,
+[nhật ký](docs/progress/2026-09-25-giai-doan-b-dashboard.md)), ✅ job CI `scenarios` +
+`infra/bootstrap.py` ([nhật ký](docs/progress/2026-09-25-giai-doan-b-ci.md)). Tiếp theo: test hỗn
+loạn CH-1…7.
+
+## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
+
+> **Chỉ tập trung vào luồng dữ liệu.** Không dựng tiếp ứng dụng để dùng. Dữ liệu vào bằng
+> **bộ giả lập** ([docs/18](docs/18-simulator.md)), không qua UI. Chứng minh ổn định xong mới
+> làm tính năng.
+
+**A** luồng dữ liệu thông suốt ([docs/17](docs/17-data-flow.md)) → **B** chứng minh ổn định &
+scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
+([docs/06](docs/06-roadmap.md)). Hệ quả khi làm việc:
+- **Không viết UI mới** trong A/B. UI POS tuần 1 đóng băng: giữ, không mở rộng.
+- Chỉ thêm code tính năng khi **thiếu nó thì luồng thiếu một loại dữ liệu**. Code thêm là use
+  case + route JSON, không kèm UI. Ví dụ đúng: `POST /customers`. Ví dụ sai: tra khách 3 bước.
+- Bộ giả lập ở chế độ `edge` **đi qua Edge API thật**, không `INSERT` thẳng vào bảng giao dịch
+  cửa hàng. Dữ liệu `bulk` chỉ để đo khối lượng, không dùng làm bằng chứng đúng.
+- Người dùng hỏi tính năng C (tra khách, báo cáo ca, dashboard...) → nhắc là đang ở giai đoạn
+  nào, trỏ về ADR-010, đừng tự làm.
+- Trước khi viết trích xuất/nạp ClickHouse: đọc **5 bẫy ở [docs/17 §4](docs/17-data-flow.md)**.
+  Bẫy 1–4 đã sửa (2026-09-23) — dùng lại cách sửa, đừng viết lại: mép cửa sổ trích xuất là
+  `extract_horizon()`, không phải `now()`; watermark do **trigger** đặt, handler không cần set;
+  mọi bảng `bronze_*` phải có `non_replicated_deduplication_window` (test đỏ nếu quên); token
+  nạp ClickHouse = đường dẫn **+ SHA-256 nội dung**.
+- **Lake bất biến:** file bronze đã ghi thì không bao giờ trích lại. Cửa sổ mới bắt đầu ở mép
+  cuối của file cuối cùng, nên chính lake là trạng thái, không có bảng watermark riêng.
+- MinIO: **`quay.io/minio/minio`** (ghim bản). Docker Hub `minio/minio` đã không còn.
+- **Một lượt pipeline mỗi lúc:** `run_once` giữ advisory lock trên PG trung tâm qua CẢ trích
+  lẫn nạp (DAG và `make pipeline-run` có thể chồng nhau). Bảng incremental rỗng vẫn ghi một
+  file mốc, vì mép "đã nạp tới" đòi đủ 7 bảng.
+- **dbt (S6), đọc [data_platform/README.md](data_platform/README.md) trước khi thêm model:** fact
+  tăng dần = `insert_overwrite` + `affected_months()` + `pipeline_cutoff()` (bẫy 5). Staging
+  lọc `loaded_until()`. Mart dùng `MergeTree`, **không** `ReplacingMergeTree` (nó che nhân đôi
+  khỏi audit L4). Dim có inferred member. **Bẫy alias ClickHouse:** `f(x) AS x ... WHERE x` kiểm
+  alias chứ không kiểm cột.
+- **Partition `point_ledger` giữ cả tháng trước** (migration `0006`, `months_back`): cửa hàng
+  offline qua cuối tháng đồng bộ ngày 1. Ở tháng go-live partition đó không có sẵn, và điểm vào
+  dead-letter không thử lại. Đừng bỏ `months_back`.
+- **Ca chỉ lên trung tâm khi đóng** → `dim_shift` có dòng inferred cho ca đang mở. DAG chạy giữa
+  giờ bán là bình thường, đừng biến nó thành test đỏ.
+- **Bộ giả lập `virtual`** ([docs/18 §3](docs/18-simulator.md)) được import ĐÚNG 4 module thuần của
+  edge (`edge.sync.client`, `edge.sync.backoff`, `edge.pos.domain`, `edge.loyalty.domain`). Thêm
+  import DB/FastAPI vào chúng là test tính thuần đỏ. Khóa cửa hàng ảo ở `runs/virtual-keys.env`
+  là SECRET (gitignore).
+- **Dựng stack: `uv run python infra/bootstrap.py`** (migrate, seed, khóa, lake, chờ DAG — chạy lại
+  được, giữ khóa còn hợp lệ). `crawl_data/` thật KHÔNG nằm trong git → clone sạch/CI dùng
+  `tests/fixtures/crawl_data/` (tổng hợp). `SEED_EMPLOYEE_PASSWORD` sống trong `infra/.env`.
+  Stack thử riêng: `--project/--env-file` + biến `RETAIL_SYNC_*` cho `tests/scenarios/`.
+- **`tests/scenarios/` là OPT-IN** (`make test-scenarios`, `RETAIL_SYNC_SCENARIOS=1`): chúng đổi
+  trạng thái compose (AT-02 TẮT `central-api`). Đừng chạy khi đang có lần chạy bộ giả lập hay test
+  ngâm trên compose. 3 cửa hàng: `--profile edge --profile edge-multi` (store-002/003, khóa
+  `CENTRAL_API_KEY_STORE_00N` trong `infra/.env`).
+- **Airflow 3 trên compose:** `api-server` (không còn `webserver`) + `dag-processor` + JWT chung
+  (`AIRFLOW_JWT_SECRET`). dbt ở venv riêng, cosmos `InvocationMode.SUBPROCESS`. Bản dbt ghim ở
+  `data_platform/requirements-dbt.txt` (một chỗ cho image, Makefile, test).
+
+- **Metric (dashboard "sức khỏe luồng", [docs/17 §6](docs/17-data-flow.md), [10 §9](docs/10-observability.md)):**
+  `store_id` phải là ATTRIBUTE của điểm đo — thuộc tính resource KHÔNG thành label trong Prometheus
+  của `otel-lgtm`. Độ trễ request lấy từ FastAPI semconv ổn định (`setup_metrics()` bật), không tự
+  tạo histogram giây (bucket mặc định 0…10000). `setup_metrics()` gọi TRƯỚC `instrument_fastapi()`.
+  Outbox đo ở **edge-api**, không ở worker. Metric trạng thái S3–S6 do `pipeline monitor`
+  (service `flow-monitor`) đọc. Thêm/đổi tên metric → sửa `flow-health.json` (test
+  `test_flow_dashboard.py` đỏ nếu lệch). **Mật khẩu không bao giờ trong URL** (httpx log URL ở INFO):
+  ClickHouse đăng nhập bằng header.
+
+**Sync worker — quy tắc không được phá:** mất mạng/401/503 là lỗi của ĐƯỜNG TRUYỀN, không bao
+giờ tăng `outbox.attempts`. Chỉ khi trung tâm xét và từ chối một sự kiện mới tính lượt thử.
+Trộn hai loại thì cửa hàng offline vài phút tự vứt dữ liệu đúng vào dead-letter (AT-02).
 
 **Bắt buộc đọc [docs/README.md](docs/README.md) trước khi đề xuất hay viết code.** Bộ docs
 đó là nguồn sự thật cho thiết kế — requirements, quy mô, kiến trúc, tech stack, và các ADR
@@ -22,8 +94,11 @@ từng tuần), KHÁC với bộ docs thiết kế `00`–`16` (không đổi th
 |---|---|
 | `store/`, `central/` | **Prototype v1 — chỉ để tham khảo.** Không phát triển tiếp trên đó. Xem [docs/09-v1-postmortem.md](docs/09-v1-postmortem.md) |
 | `crawl_data/` | **Tài sản giữ lại** — dữ liệu sản phẩm và cửa hàng thật, dùng làm master data cho v2 |
-| `packages/` | **Source v2** — `shared` · `edge` (pos/loyalty/reporting/sync/web) · `central`. Tuần 1 xong: PlaceSale + Loyalty + auth JWT + UI POS + seed + OTel chạy thật. Tuần 2 đang viết: sync worker, `POST /events`, tra cứu khách hàng, trả hàng/ca/báo cáo |
-| `tests/`, `infra/`, `data_platform/`, `simulator/` | Test, compose + Dockerfile, Airflow/dbt, sinh tải |
+| `packages/` | **Source v2** — `shared` · `edge` (pos/loyalty/reporting/sync/web) · `central`. Tuần 1 xong: PlaceSale + Loyalty + auth JWT + UI POS + seed + OTel chạy thật. Tuần 2: **đồng bộ outbox → `POST /events` đã chạy thật** (2026-09-23, [nhật ký](docs/progress/2026-09-23-tuan-2-dong-bo.md)). Giai đoạn A: đường ghi cho bộ giả lập + đối soát INV-4 + trích xuất/nạp bronze + **dbt S6 + Airflow** + bộ giả lập `virtual` + `tests/scenarios/` xong — **cổng A đạt 2026-09-24**. Tiếp theo: giai đoạn B |
+| `packages/simulator/` | **Bộ giả lập — nguồn dữ liệu của giai đoạn A/B** ([docs/18](docs/18-simulator.md)). Chế độ `edge` + **`virtual`** (tật `offline`/`resend`/`concurrent_customer`) + audit **L1…L4** chạy thật (2026-09-24). Là CLIENT: chỉ được import 4 module thuần của edge (cho chế độ `virtual`), không bao giờ import `central` (import-linter) |
+| `packages/pipeline/` | **S4 trích xuất + S5 nạp bronze** ([docs/17](docs/17-data-flow.md)) — chạy thật trên compose (2026-09-24). **Bộ giám sát luồng** `monitor.py` (`python -m pipeline health|monitor`, 2026-09-25). Độc lập: không import `shared`/`edge`/`central`/`simulator` (chạy cả trong image Airflow). DDL bronze ở `ddl/bronze.sql` |
+| `data_platform/` | **dbt S6** (staging → dim/fact, 32 test) + **DAG `retail_pipeline`** (Airflow 3.3.2 + cosmos), chạy thật trên compose (2026-09-24). Test: `tests/integration/test_dbt_marts.py` |
+| `tests/`, `infra/` | Test, compose + Dockerfile |
 | `docs/` | Thiết kế v2 — nguồn sự thật, đã hoàn tất |
 
 Đừng sửa lỗi trong `store/` hay `central/` trừ khi được yêu cầu rõ ràng — v1 sẽ được thay
@@ -35,7 +110,8 @@ thế, không phải vá.
 
 Hệ quả khi ra quyết định:
 - Observability, test hỗn loạn, test ngâm, test tải là **Must**, không phải "nếu kịp"
-- Tính năng phụ (trừ tồn kho, đối soát tiền chốt ca, SCD2, Metabase) hạ xuống **Could**
+- Tính năng phụ (trừ tồn kho, đối soát tiền chốt ca, SCD2, Metabase) hạ xuống **Could**.
+  Từ 2026-09-23, **mọi** tính năng dùng tại quầy dời ra sau cổng B (ADR-010)
 - Mọi scale seam phải được **chứng minh bằng số đo**, không chỉ ghi trong doc
 - Quy tắc nghiệp vụ **cấu hình được**, không hardcode — chỉnh theo thực tế khi tích hợp
 - Xem [docs/08-reliability-and-scale.md](docs/08-reliability-and-scale.md)
@@ -66,6 +142,7 @@ Hệ quả khi ra quyết định:
 | **Airflow 3 + LocalExecutor** *(chủ dự án đã có kinh nghiệm)* | [007](docs/adr/007-airflow-over-dagster.md) — thay thế [006](docs/adr/006-dagster-over-airflow.md) |
 | **HTMX + Alpine.js** cho UI, **không** redeem điểm v1, **không** multi-tenant | [008](docs/adr/008-remaining-decisions.md) |
 | **OpenTelemetry + `grafana/otel-lgtm`** (compose profile riêng) để săn bottleneck | [009](docs/adr/009-observability-stack.md) |
+| **Luồng dữ liệu trước, tính năng sau** — bộ giả lập thay UI, test tải bằng bộ giả lập (không `k6`), silver = staging dbt | [010](docs/adr/010-data-flow-first.md) |
 
 ✅ **Stack đã chốt 2026-09-11** — [docs/07-stack-decision.md](docs/07-stack-decision.md).
 
@@ -97,7 +174,7 @@ Dễ quên, hỏng nặng nếu bỏ sót. Chi tiết + lý do ở
 [docs/11-design-readiness.md §2](docs/11-design-readiness.md).
 
 1. `synchronous_commit = on` ở Postgres cửa hàng — **không tắt để tối ưu** (không có UPS)
-2. **Tự động tạo partition** `point_ledger` trước 3 tháng — hết partition = toàn hệ thống điểm chết
+2. **Tự động tạo partition** `point_ledger` trước 3 tháng **và giữ tháng trước** — hết partition = toàn hệ thống điểm chết
 3. Bronze phân vùng theo **`recorded_at`** (ngày nạp), không theo `occurred_at`
 4. Idempotency ClickHouse dùng **`insert_deduplication_token`**, không dựa `ReplacingMergeTree`
 5. **`fact_payment` tách riêng** — gộp vào `fact_sale_line` sẽ nhân doanh thu N×M lần
