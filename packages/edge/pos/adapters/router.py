@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from edge.loyalty.api import CustomerSnapshot, build_loyalty_service
@@ -36,10 +37,19 @@ from edge.pos.application.place_sale import (
     RequestedPayment,
     SaleRejectedError,
     place_sale,
+    quote_sale,
 )
-from edge.settings import get_jwt_settings, get_pricing_rules, get_settings
+from edge.pos.application.shifts import (
+    CloseShiftCommand,
+    OpenShiftCommand,
+    ShiftRejectedError,
+    close_shift,
+    open_shift,
+)
+from edge.settings import get_jwt_settings, get_pii_settings, get_pricing_rules, get_settings
 from shared.db import transaction
 from shared.outbox import OutboxPublisher
+from shared.pii import InvalidPhoneError
 from shared.security import AccessTokenClaims
 from shared.types import Money, PaymentMethod, Role, utcnow
 
@@ -52,6 +62,15 @@ _HTTP_STATUS: dict[str, int] = {
     "INVALID_PRICING": status.HTTP_400_BAD_REQUEST,
     "PRODUCT_NOT_FOUND": status.HTTP_404_NOT_FOUND,
     "SHIFT_CLOSED": status.HTTP_409_CONFLICT,
+}
+
+#: `ShiftRejectedError.code` → HTTP.
+_SHIFT_HTTP_STATUS: dict[str, int] = {
+    "SHIFT_ALREADY_OPEN": status.HTTP_409_CONFLICT,
+    "SHIFT_CLOSED": status.HTTP_409_CONFLICT,
+    "INVALID_BUSINESS_DATE": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "INVALID_OPENING_CASH": status.HTTP_422_UNPROCESSABLE_CONTENT,
+    "INVALID_COUNTED_CASH": status.HTTP_422_UNPROCESSABLE_CONTENT,
 }
 
 
@@ -96,6 +115,22 @@ class PlaceSaleResponse(BaseModel):
     points_earned: int | None
 
 
+class QuoteRequest(BaseModel):
+    """Cùng giỏ và khách như `POST /sales`, không có thanh toán và ca."""
+
+    lines: list[SaleLineRequest] = Field(min_length=1)
+    customer_id: uuid.UUID | None = None
+    promo_discount_pct: int = Field(default=0, ge=0, le=100)
+
+
+class QuoteResponse(BaseModel):
+    subtotal: Money
+    discount_tier: Money
+    discount_promo: Money
+    total: Money
+    tier_discount_pct: int
+
+
 class ProductResponse(BaseModel):
     product_id: str
     sku: str
@@ -104,6 +139,46 @@ class ProductResponse(BaseModel):
     unit_price: Money
     #: Tuổi của bản sao master data. UI cảnh báo khi > 24h (B02 E03).
     synced_hours_ago: float
+
+
+class RegisterCustomerRequest(BaseModel):
+    """FR-L02. CHỈ SĐT — không nhận tên ở giai đoạn A: chưa có khóa mã hóa PII, và không thu
+    thập thứ chưa bảo vệ được (ràng buộc #10). Tên đi kèm mã hóa ở giai đoạn C."""
+
+    phone: str = Field(min_length=8, max_length=20)
+
+
+class RegisterCustomerResponse(BaseModel):
+    customer_id: uuid.UUID
+    #: `false` = SĐT đã có ở cửa hàng này, trả về khách cũ (HTTP 200 thay vì 201).
+    created: bool
+
+
+class OpenShiftRequest(BaseModel):
+    #: G5 — khai tường minh; phải là hôm nay hoặc hôm qua theo giờ cửa hàng.
+    business_date: date
+    opening_cash: Money = Field(ge=0)
+
+
+class OpenShiftResponse(BaseModel):
+    shift_id: uuid.UUID
+    business_date: date
+
+
+class CloseShiftRequest(BaseModel):
+    counted_cash: Money = Field(ge=0)
+    variance_note: str | None = Field(default=None, max_length=500)
+
+
+class CloseShiftResponse(BaseModel):
+    shift_id: uuid.UUID
+    business_date: date
+    opening_cash: Money
+    cash_collected: Money
+    expected_cash: Money
+    counted_cash: Money
+    variance: Money
+    closed_at: datetime
 
 
 class LoginRequest(BaseModel):
@@ -172,6 +247,42 @@ async def get_product_by_barcode(
             status.HTTP_404_NOT_FOUND, f"Không tìm thấy mã vạch {barcode} trong product_cache"
         )
     return ProductResponse(**product)
+
+
+@router.post(
+    "/sales/quote",
+    response_model=QuoteResponse,
+    summary="FR-P05 — tạm tính giỏ hàng (không ghi gì)",
+    dependencies=[Depends(require_role("cashier"))],
+)
+async def quote(request: Request, body: QuoteRequest) -> QuoteResponse:
+    """Cùng hàm tính tiền với `POST /sales` — số `total` trả về là số phải thanh toán.
+
+    Không mở transaction ghi: chỉ đọc `product_cache`, bản sao khách và quy tắc hạng.
+    """
+    settings = get_settings()
+    async with request.app.state.session_factory() as session:
+        loyalty = await build_loyalty_service(session, store_id=settings.store_id, at=utcnow())
+        customer = (
+            await loyalty.snapshot_for(body.customer_id)
+            if body.customer_id
+            else CustomerSnapshot.anonymous()
+        )
+        try:
+            result = await quote_sale(
+                lines=[RequestedLine(line.product_id, line.quantity) for line in body.lines],
+                customer=customer,
+                promo_discount_pct=body.promo_discount_pct,
+                catalog=PostgresProductCatalog(session),
+                loyalty=loyalty,
+                rules=get_pricing_rules(),
+            )
+        except SaleRejectedError as exc:
+            raise HTTPException(
+                _HTTP_STATUS.get(exc.code, status.HTTP_400_BAD_REQUEST),
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+    return QuoteResponse(**asdict(result))
 
 
 @router.post(
@@ -244,3 +355,114 @@ async def create_sale(
             ) from exc
 
     return PlaceSaleResponse(**asdict(receipt))
+
+
+# ═════════════ Khách hàng & ca — nguồn dữ liệu của luồng (ADR-010 quy tắc 2) ═════════════
+
+
+def _shift_error(exc: ShiftRejectedError) -> HTTPException:
+    detail: dict[str, object] = {"code": exc.code, "message": str(exc)}
+    if exc.shift_id is not None:
+        detail["shift_id"] = str(exc.shift_id)
+    return HTTPException(_SHIFT_HTTP_STATUS.get(exc.code, status.HTTP_400_BAD_REQUEST), detail)
+
+
+@router.post(
+    "/customers",
+    response_model=RegisterCustomerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="FR-L02 — đăng ký khách tại quầy (chạy được khi offline)",
+    dependencies=[Depends(require_role("cashier"))],
+)
+async def register_customer(
+    request: Request, body: RegisterCustomerRequest, response: Response
+) -> RegisterCustomerResponse:
+    """Tạo khách cục bộ + `CustomerCreated` vào outbox, một transaction. Không gọi trung tâm.
+
+    SĐT đã có ở cửa hàng → `200` với khách cũ. Thu ngân gõ lại SĐT khách quen là chuyện hằng
+    ngày; trả lỗi ở đây chỉ bắt thu ngân làm thêm một bước tra cứu.
+    """
+    settings = get_settings()
+    occurred_at = utcnow()
+    try:
+        async with transaction(request.app.state.session_factory) as session:
+            loyalty = await build_loyalty_service(
+                session,
+                store_id=settings.store_id,
+                at=occurred_at,
+                phone_hash_key=get_pii_settings().hash_key,
+            )
+            result = await loyalty.register_customer(phone=body.phone, occurred_at=occurred_at)
+    except InvalidPhoneError as exc:
+        # Thông điệp của InvalidPhoneError không chứa số khách gõ — an toàn để trả về.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": "INVALID_PHONE", "message": str(exc)},
+        ) from exc
+
+    if not result.created:
+        response.status_code = status.HTTP_200_OK
+    return RegisterCustomerResponse(customer_id=result.customer_id, created=result.created)
+
+
+@router.post(
+    "/shifts/open",
+    response_model=OpenShiftResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="FR-P11 — mở ca",
+)
+async def open_shift_route(
+    request: Request,
+    body: OpenShiftRequest,
+    claims: Annotated[AccessTokenClaims, Depends(require_role("cashier"))],
+) -> OpenShiftResponse:
+    """Cửa hàng đã có ca mở → `409 SHIFT_ALREADY_OPEN`, kèm `shift_id` của ca đó."""
+    settings = get_settings()
+    try:
+        async with transaction(request.app.state.session_factory) as session:
+            shift = await open_shift(
+                OpenShiftCommand(
+                    store_id=settings.store_id,
+                    employee_id=claims.employee_id,
+                    business_date=body.business_date,
+                    opening_cash=body.opening_cash,
+                    opened_at=utcnow(),
+                    store_utc_offset=timedelta(minutes=settings.store_utc_offset_minutes),
+                ),
+                shifts=PostgresShifts(session),
+            )
+    except ShiftRejectedError as exc:
+        raise _shift_error(exc) from exc
+    return OpenShiftResponse(shift_id=shift.shift_id, business_date=shift.business_date)
+
+
+@router.post(
+    "/shifts/{shift_id}/close",
+    response_model=CloseShiftResponse,
+    summary="FR-P11 — đóng ca (quản lý)",
+)
+async def close_shift_route(
+    request: Request,
+    shift_id: uuid.UUID,
+    body: CloseShiftRequest,
+    claims: Annotated[AccessTokenClaims, Depends(require_role("manager"))],
+) -> CloseShiftResponse:
+    """Ca đã đóng / không thuộc cửa hàng này → `409 SHIFT_CLOSED`."""
+    settings = get_settings()
+    try:
+        async with transaction(request.app.state.session_factory) as session:
+            report = await close_shift(
+                CloseShiftCommand(
+                    shift_id=shift_id,
+                    store_id=settings.store_id,
+                    employee_id=claims.employee_id,
+                    counted_cash=body.counted_cash,
+                    variance_note=body.variance_note,
+                    closed_at=utcnow(),
+                ),
+                shifts=PostgresShifts(session),
+                events=OutboxPublisher(session, store_id=settings.store_id),
+            )
+    except ShiftRejectedError as exc:
+        raise _shift_error(exc) from exc
+    return CloseShiftResponse(**asdict(report))

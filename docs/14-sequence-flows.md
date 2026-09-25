@@ -79,6 +79,8 @@ sequenceDiagram
     participant P as Postgres (cửa hàng)
 
     M->>A: POST /shifts/{id}/close {counted_cash: 2120000}
+    A->>P: SELECT shift ... FOR UPDATE
+    Note over P: ĐỢI mọi đơn đang chốt dở (chúng giữ FOR SHARE trên ca)
     A->>P: SELECT SUM(sale_payment.amount) WHERE method='CASH' AND shift_id=?
     A->>P: expected_cash = opening_cash + tiền_mặt_thu
     A->>A: variance = counted_cash - expected_cash
@@ -89,6 +91,13 @@ sequenceDiagram
     A-->>M: Báo cáo ca: doanh thu, số đơn, variance
     Note over M,A: T+0 — chạy được cả khi mất mạng trung tâm hoàn toàn
 ```
+
+**Khóa ca là bắt buộc (2026-09-23).** `place_sale` đọc ca bằng `FOR SHARE`, còn đóng ca lấy
+`FOR UPDATE` **trước** khi cộng tiền. Thiếu khóa này, một đơn đã đọc ca nhưng chưa kịp chèn
+dòng `sale` sẽ commit ngay sau lúc đóng ca cộng tiền. Đơn đó nằm trong ca đã đóng, và
+`expected_cash` thiếu đúng số tiền của nó. Khóa ngoại `sale → shift` chỉ chặn được từ lúc
+dòng `sale` đã chèn, không che được khe hở giữa đọc ca và chèn đơn.
+`test_close_waits_for_a_sale_that_is_committing` dừng đúng trong khe đó (đã kiểm đột biến).
 
 **Đây là luồng chứng minh lớp truy vấn A ([B03](business/03-analytical-workload.md))**: mọi
 bước đều nằm trong Postgres cửa hàng, không có bước nào phụ thuộc trung tâm.
@@ -106,30 +115,38 @@ sequenceDiagram
     participant P as Postgres (cửa hàng)
     participant X as Central API
 
-    loop mỗi 2s
-        W->>P: SELECT outbox WHERE sent_at IS NULL ORDER BY id LIMIT 200 FOR UPDATE SKIP LOCKED
-        P-->>W: lô sự kiện (rỗng nếu không có gì mới)
+    loop mỗi 2s (hoặc ngay lập tức nếu lô trước đầy — xả tồn đọng)
+        W->>P: SELECT outbox WHERE sent_at IS NULL AND dead_lettered_at IS NULL<br/>AND (next_attempt_at IS NULL OR next_attempt_at <= now())<br/>ORDER BY id LIMIT 200 FOR UPDATE SKIP LOCKED
+        P-->>W: lô sự kiện đến hạn (rỗng nếu không có gì)
 
         alt Lô rỗng
             Note over W: Ngủ tới vòng lặp sau, không gọi trung tâm
         else Có sự kiện
             W->>X: POST /events (lô, kèm traceparent mỗi event)
-            alt 2xx — thành công toàn bộ hoặc một phần
-                X-->>W: {accepted: [...], rejected: [...]}
+            alt 200 — trung tâm đã xét TỪNG sự kiện
+                X-->>W: {accepted: [...], rejected: [{event_id, reason, retryable}]}
                 W->>P: UPDATE outbox SET sent_at=now() WHERE event_id IN (accepted)
-                Note over W: Sự kiện trong "rejected" KHÔNG đánh dấu sent_at — sẽ retry lô sau
-            else 429/503 (backpressure — 08 §3.2)
-                Note over W: Đọc header Retry-After
-                W->>W: sleep(retry_after * jitter[0.5,1.5])
-            else Lỗi mạng / timeout
-                W->>W: attempts += 1; sleep(min(2^attempts, 300) * jitter)
-                alt attempts > NGƯỠNG (vd 20)
-                    W->>P: chuyển sang bảng dead_letter, cảnh báo
+                Note over P: trigger: point_ledger_local.synced_at = sent_at
+                alt rejected, retryable=false
+                    W->>P: dead_lettered_at=now() — ngay, không đốt lượt thử
+                else rejected, retryable=true
+                    W->>P: attempts+=1, next_attempt_at = now()+backoff(attempts)
+                    Note over W: quá SYNC_MAX_ATTEMPTS → dead-letter
                 end
+            else 401 / 413 / 429 / 503 / 5xx / mạng / timeout
+                Note over W: Lỗi của ĐƯỜNG TRUYỀN — KHÔNG đụng tới attempts của sự kiện nào
+                W->>W: sleep(Retry-After nếu có, nếu không thì backoff theo số lần lỗi liên tiếp)
             end
         end
     end
 ```
+
+> ⚠️ **Đính chính 2026-09-23.** Bản đầu của sơ đồ này có nhánh *"Lỗi mạng / timeout →
+> `attempts += 1` → quá ngưỡng thì dead-letter"*. Làm đúng theo đó, một cửa hàng mất mạng vài
+> phút sẽ tự đẩy dữ liệu **đúng** của mình vào dead-letter — vi phạm thẳng AT-02 và NFR-01.
+> `attempts` chỉ được đếm số lần **trung tâm đã xét và từ chối** sự kiện; mất mạng thì lùi cả
+> vòng lặp. Test `test_central_unreachable_never_consumes_attempts` giữ quy tắc này (đã kiểm
+> bằng đột biến: đưa lỗi cũ trở lại thì test đỏ).
 
 **Điểm hay bỏ sót:** xử lý lô **một phần thành công** — nếu worker coi cả lô là thất bại
 khi chỉ 1/200 sự kiện lỗi, 199 sự kiện kia sẽ bị gửi lại (vô hại nhờ idempotency, nhưng lãng
@@ -137,4 +154,9 @@ phí và làm chậm hội tụ). Hợp đồng `{accepted, rejected}` ở [13-a
 tồn tại chính để giải quyết việc này.
 
 ---
+*Changelog: 2026-09-23 (lần 2) — §3: khóa ca `FOR SHARE`/`FOR UPDATE` giữa chốt đơn và đóng ca.*
+
+*Changelog: 2026-09-23 — §4 viết lại theo hiện thực sync worker: tách lỗi đường truyền khỏi lỗi
+của sự kiện (đính chính nhánh sai), thêm `retryable`, `next_attempt_at`, trigger `synced_at`.*
+
 *Changelog: 2026-09-11 — tạo mới, bổ sung 4 luồng còn thiếu so với 03-architecture.*

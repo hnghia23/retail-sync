@@ -54,6 +54,20 @@ khoảng 3–6 giờ chỉ để dựng, nối và gỡ lỗi — chưa tính co
 - Đồng bộ hai chiều store ↔ trung tâm
 - Lake dữ liệu thô + Warehouse mô hình chiều + dashboard
 
+### Thứ tự thực hiện *(bổ sung 2026-09-23 — [ADR-010](adr/010-data-flow-first.md))*
+
+Phạm vi trên là **sản phẩm cuối**. Trong ngân sách 1 tháng, dự án chỉ làm **luồng dữ liệu**
+và **bằng chứng ổn định**. Tính năng dùng tại quầy để sau:
+
+| Giai đoạn | Làm gì | Dữ liệu từ đâu |
+|---|---|---|
+| **A — Luồng dữ liệu** | Cửa hàng → outbox → trung tâm → bronze → ClickHouse, đúng và đủ ở mọi tầng ([17](17-data-flow.md)) | **Bộ giả lập** ([18](18-simulator.md)), không phải UI |
+| **B — Chứng minh** | Hỗn loạn, ngâm 72h, tải, scale seam, tất cả bằng số đo | Bộ giả lập ở quy mô T0 → T3 |
+| **C — Tính năng** | Tra khách, báo cáo ca, UI đăng ký/trả hàng/chốt ca, master data, dashboard | Người dùng thật |
+
+Chủ dự án không cần một ứng dụng dùng được ngay. Cái cần là **một luồng dữ liệu đã được chứng
+minh chạy ổn định**, để các tính năng xây sau có nền đáng tin.
+
 ### Ngoài phạm vi v1 (ghi rõ để khỏi trôi phạm vi)
 
 | Không làm | Lý do |
@@ -90,4 +104,6 @@ Những thứ **giữ lại** từ v1:
 Những thứ **bỏ**: xem [09-v1-postmortem.md](09-v1-postmortem.md) và [04-tech-stack.md](04-tech-stack.md).
 
 ---
+*Changelog: 2026-09-23 — thêm "Thứ tự thực hiện" theo ADR-010.*
+
 *Changelog: 2026-09-11 — tạo mới.*

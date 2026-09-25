@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from edge.loyalty.domain.customer import CustomerSnapshot, PointsAccrual
+from edge.loyalty.domain.customer import CustomerSnapshot, PointsAccrual, RegisteredCustomer
 from edge.loyalty.domain.points import (
     EarnRule,
     balance_of,
@@ -25,7 +25,8 @@ from edge.loyalty.domain.points import (
     points_to_reverse,
 )
 from edge.loyalty.domain.tier import TierRule, resolve_tier, tier_discount_pct
-from shared.events import PointsPayload
+from shared.events import CustomerPayload, PointsPayload
+from shared.pii import hash_phone
 from shared.types import Money, PointReason, Tier, new_event_id
 
 if TYPE_CHECKING:
@@ -37,7 +38,13 @@ if TYPE_CHECKING:
     from edge.loyalty.adapters.postgres import PostgresCustomers, PostgresLedger
     from shared.outbox import OutboxPublisher
 
-__all__ = ["CustomerSnapshot", "LoyaltyService", "PointsAccrual", "build_loyalty_service"]
+__all__ = [
+    "CustomerSnapshot",
+    "LoyaltyService",
+    "PointsAccrual",
+    "RegisteredCustomer",
+    "build_loyalty_service",
+]
 
 
 class LoyaltyService:
@@ -60,7 +67,9 @@ class LoyaltyService:
         store_id: str,
         tier_rules: Sequence[TierRule],
         earn_rule: EarnRule,
+        phone_hash_key: str = "",
     ) -> None:
+        self._phone_hash_key = phone_hash_key
         self._ledger = ledger
         self._customers = customers
         self._events = events
@@ -73,7 +82,7 @@ class LoyaltyService:
     async def resolve_customer(self, *, phone_hash: str) -> CustomerSnapshot:
         """Bước 2 của thác đổ ở docs/13 §4 — bản sao cục bộ.
 
-        Bước 1 (Redis) và bước 3 (gọi trung tâm, timeout 500ms) nối vào ở tuần 2 ngày 9.
+        Bước 1 (Redis) và bước 3 (gọi trung tâm, timeout 500ms) nối vào ở giai đoạn C (ADR-010).
         Không tra được → `anonymous()`, KHÔNG ném lỗi: hợp đồng của port là "luôn trả về
         một snapshot", vì tra khách không bao giờ được chặn việc bán hàng.
         """
@@ -114,6 +123,32 @@ class LoyaltyService:
         return balance_of(await self._ledger.entries_for(customer_id))
 
     # ─────────────────── Ghi ───────────────────
+
+    async def register_customer(self, *, phone: str, occurred_at: datetime) -> RegisteredCustomer:
+        """Đăng ký khách tại quầy — FR-L02. Chạy được khi mất mạng (C02).
+
+        Phát `CustomerCreated` vào outbox **chỉ khi thật sự tạo mới**, trong cùng transaction
+        với dòng `customer_local`. Outbox gửi theo thứ tự `id`, nên sự kiện này luôn tới trung
+        tâm TRƯỚC mọi `PointsEarned` của khách đó — nếu ngược lại, điểm vỡ khóa ngoại ở trung
+        tâm và phải chờ thử lại.
+
+        Ném `shared.pii.InvalidPhoneError` nếu SĐT không nhận ra được.
+        """
+        phone_hash = hash_phone(phone, key=self._phone_hash_key)
+        customer_id, created = await self._customers.register(
+            customer_id=new_event_id(), phone_hash=phone_hash
+        )
+        if created:
+            await self._events.publish(
+                event_type="CustomerCreated",
+                occurred_at=occurred_at,
+                payload=CustomerPayload(
+                    customer_id=customer_id,
+                    phone_hash=phone_hash,
+                    created_locally_at_store=self._store_id,
+                ),
+            )
+        return RegisteredCustomer(customer_id=customer_id, created=created)
 
     async def accrue_for_sale(
         self,
@@ -223,7 +258,7 @@ class LoyaltyService:
 
 
 async def build_loyalty_service(
-    session: AsyncSession, *, store_id: str, at: datetime
+    session: AsyncSession, *, store_id: str, at: datetime, phone_hash_key: str = ""
 ) -> LoyaltyService:
     """Dựng `LoyaltyService` trên một session đang có transaction.
 
@@ -250,4 +285,5 @@ async def build_loyalty_service(
         store_id=store_id,
         tier_rules=await rules.tier_rules(),
         earn_rule=await rules.earn_rule(at),
+        phone_hash_key=phone_hash_key,
     )

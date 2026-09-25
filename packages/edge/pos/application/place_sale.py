@@ -37,7 +37,7 @@ from edge.pos.application.ports import (
     SalePaymentToPersist,
     SaleToPersist,
 )
-from edge.pos.domain.pricing import CartLine, PricingError, price_cart
+from edge.pos.domain.pricing import CartLine, PricedSale, PricingError, price_cart
 from shared.events import SaleCompletedPayload, SaleLinePayload, SalePaymentPayload
 from shared.types import Money, PaymentMethod, new_event_id, utcnow
 
@@ -133,18 +133,14 @@ async def place_sale(
 ) -> SaleReceipt:
     """Chốt một đơn hàng. Gọi bên trong một transaction đang mở."""
     shift = await _require_open_shift(shifts, command.shift_id)
-    cart = await _build_cart(catalog, command.lines)
-
-    tier_pct = _tier_discount_pct(loyalty, command.customer)
-    try:
-        priced = price_cart(
-            cart,
-            rules=rules,
-            tier_discount_pct=tier_pct,
-            promo_discount_pct=command.promo_discount_pct,
-        )
-    except PricingError as exc:
-        raise SaleRejectedError("INVALID_PRICING", str(exc)) from exc
+    priced, tier_pct = await _price(
+        catalog,
+        loyalty,
+        lines=command.lines,
+        customer=command.customer,
+        promo_discount_pct=command.promo_discount_pct,
+        rules=rules,
+    )
 
     _require_payments_match_total(command.payments, priced.total)
     change_amount = _change_amount(command)
@@ -241,7 +237,75 @@ async def place_sale(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SaleQuote:
+    """Tạm tính — cùng số tiền mà `place_sale` sẽ tính cho cùng giỏ, cùng khách."""
+
+    subtotal: Money
+    discount_tier: Money
+    discount_promo: Money
+    total: Money
+    tier_discount_pct: int
+
+
+async def quote_sale(
+    *,
+    lines: list[RequestedLine],
+    customer: CustomerSnapshot,
+    promo_discount_pct: int,
+    catalog: ProductCatalogPort,
+    loyalty: LoyaltyPort,
+    rules: PricingRules,
+) -> SaleQuote:
+    """Tạm tính một giỏ — không ghi gì, không cần ca.
+
+    `POST /sales` đòi tổng thanh toán khớp ĐÚNG tổng tiền (INV-2), mà tổng tiền do cửa hàng
+    tính (chiết khấu hạng, làm tròn theo cấu hình). Client nào cũng cần biết con số đó trước
+    khi trả tiền: màn hình thu ngân, và bộ giả lập (docs/18). Dùng CHUNG `_price()` với
+    `place_sale` — một định nghĩa tính tiền duy nhất, nên tạm tính và chốt đơn không thể lệch
+    nhau. Client tự tính lại giá bằng bản sao logic thì sẽ lệch ngay khi đổi `PricingRules`.
+    """
+    priced, tier_pct = await _price(
+        catalog,
+        loyalty,
+        lines=lines,
+        customer=customer,
+        promo_discount_pct=promo_discount_pct,
+        rules=rules,
+    )
+    return SaleQuote(
+        subtotal=priced.subtotal,
+        discount_tier=priced.discount_tier,
+        discount_promo=priced.discount_promo,
+        total=priced.total,
+        tier_discount_pct=tier_pct,
+    )
+
+
 # ═══════════════════════ Các bước ═══════════════════════
+
+
+async def _price(
+    catalog: ProductCatalogPort,
+    loyalty: LoyaltyPort,
+    *,
+    lines: list[RequestedLine],
+    customer: CustomerSnapshot,
+    promo_discount_pct: int,
+    rules: PricingRules,
+) -> tuple[PricedSale, int]:
+    cart = await _build_cart(catalog, lines)
+    tier_pct = _tier_discount_pct(loyalty, customer)
+    try:
+        priced = price_cart(
+            cart,
+            rules=rules,
+            tier_discount_pct=tier_pct,
+            promo_discount_pct=promo_discount_pct,
+        )
+    except PricingError as exc:
+        raise SaleRejectedError("INVALID_PRICING", str(exc)) from exc
+    return priced, tier_pct
 
 
 async def _require_open_shift(shifts: ShiftPort, shift_id: uuid.UUID) -> OpenShift:

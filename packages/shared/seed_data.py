@@ -57,6 +57,33 @@ class StoreSeed:
     region_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class EmployeeSeed:
+    employee_id: str
+    store_id: str
+    name: str
+    role: str
+
+
+def demo_employees(store_id: str, *, cashiers: int = 2) -> tuple[EmployeeSeed, ...]:
+    """Nhân viên dựng sẵn cho MỘT cửa hàng: 1 quản lý + N thu ngân — ID tất định.
+
+    Dùng chung cho `edge.ops.seed` (bản sao `employee_cache` để đăng nhập) và
+    `central.ops.seed` (bảng `employee` gốc, nguồn của `dim_employee`). Hai phía PHẢI ra cùng
+    danh sách: `sale.employee_id` ở cửa hàng mà không có dòng tương ứng ở trung tâm thì
+    `fact_sale_line` mồ côi khóa nhân viên. Tên là nhãn máy sinh, không phải người thật.
+
+    Đây là lối tắt của môi trường dev/giả lập: ở production nhân viên do trung tâm tạo và
+    đồng bộ xuống qua master data (FR-C01, giai đoạn C).
+    """
+    manager = EmployeeSeed(f"{store_id}-mgr-01", store_id, f"Quan ly {store_id}", "manager")
+    staff = tuple(
+        EmployeeSeed(f"{store_id}-cash-{i:02d}", store_id, f"Thu ngan {i} {store_id}", "cashier")
+        for i in range(1, cashiers + 1)
+    )
+    return (manager, *staff)
+
+
 class SeedDataError(ValueError):
     """Dữ liệu nguồn không đọc được — dừng seed thay vì nạp dữ liệu hỏng."""
 

@@ -99,7 +99,7 @@ class PostgresLedger:
 class PostgresCustomers:
     """Bước 2 của thác đổ tra cứu khách (docs/13 §4) — bản sao cục bộ.
 
-    Bước 1 (Redis) và bước 3 (gọi trung tâm, timeout 500ms) sẽ được nối vào ở tuần 2 ngày 9.
+    Bước 1 (Redis) và bước 3 (gọi trung tâm, timeout 500ms) sẽ được nối vào ở giai đoạn C (ADR-010).
     Bản cục bộ này đứng một mình vẫn đúng nghiệp vụ và **chạy được khi mất mạng hoàn toàn**
     — đúng nguyên tắc kiến trúc #1. Thiếu hai bước kia chỉ làm giảm tỷ lệ nhận diện được
     khách lạ với cửa hàng, không làm sai kết quả.
@@ -119,8 +119,45 @@ class PostgresCustomers:
         """
     )
 
+    # Chèn-hoặc-lấy bằng HAI câu lệnh, không phải một CTE `INSERT ... UNION SELECT`.
+    #
+    # Hai quầy cùng đăng ký một SĐT: bên sau đợi ở `ON CONFLICT` cho tới khi bên trước
+    # commit, rồi `DO NOTHING`. Nếu phần SELECT nằm trong CÙNG câu lệnh, nó dùng snapshot chụp
+    # từ đầu câu lệnh — lúc bên trước chưa commit — nên không thấy dòng nào và trả về rỗng
+    # (test `test_concurrent_registration_of_one_phone_creates_one_customer` bắt được đúng lỗi
+    # này ở bản CTE). Ở READ COMMITTED, câu SELECT RIÊNG chụp snapshot mới và thấy dòng vừa
+    # commit. Bên trước rollback thay vì commit → `ON CONFLICT` của bên sau chèn được luôn.
+    _INSERT = text(
+        """
+        INSERT INTO customer_local (customer_id, phone_hash, created_locally)
+        VALUES (:customer_id, :phone_hash, true)
+        ON CONFLICT (phone_hash) DO NOTHING
+        RETURNING customer_id
+        """
+    )
+
+    _EXISTING = text("SELECT customer_id FROM customer_local WHERE phone_hash = :phone_hash")
+
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def register(self, *, customer_id: uuid.UUID, phone_hash: str) -> tuple[uuid.UUID, bool]:
+        """`(customer_id, created)`. Không lưu SĐT hay tên dạng đọc được (ràng buộc #10).
+
+        `phone_enc`/`name_enc` để NULL ở giai đoạn A: chưa có khóa mã hóa, và không thu thập
+        PII khi chưa bảo vệ được nó. Luồng dữ liệu chỉ cần `phone_hash` (tra cứu, dò trùng).
+        """
+        inserted = (
+            await self._session.execute(
+                self._INSERT, {"customer_id": customer_id, "phone_hash": phone_hash}
+            )
+        ).scalar_one_or_none()
+        if inserted is not None:
+            return inserted, True
+        existing = (
+            await self._session.execute(self._EXISTING, {"phone_hash": phone_hash})
+        ).scalar_one()
+        return existing, False
 
     async def by_id(self, customer_id: uuid.UUID) -> CustomerSnapshot | None:
         row = (await self._session.execute(self._BY_ID, {"customer_id": customer_id})).one_or_none()

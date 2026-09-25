@@ -58,6 +58,19 @@ class JwtSettings(_EnvSettings):
     refresh_token_ttl_days: int = 7
 
 
+class PiiSettings(_EnvSettings):
+    """Khóa băm SĐT — `shared.pii`. Prefix env: `PII_`.
+
+    PHẢI giống nhau ở mọi cửa hàng và trung tâm: hash của cùng một SĐT phải so được với
+    nhau để tra khách và dò trùng C03. Đổi khóa sau khi có dữ liệu = mọi hash cũ mất nghĩa.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="PII_", extra="ignore")
+
+    # Giá trị dev, cùng cách với `JwtSettings.secret_key` — production đặt qua biến môi trường.
+    hash_key: str = "changeme-dev-pii-hash-key"
+
+
 class SyncSettings(_EnvSettings):
     """Sync worker — ADR-003. Prefix env: `SYNC_`."""
 
@@ -67,6 +80,9 @@ class SyncSettings(_EnvSettings):
     poll_interval_seconds: float = 2.0
     backoff_max_seconds: float = 300.0
     max_attempts_before_dead_letter: int = 10
+    # Trần của MỘT lần gửi lô. Worker giữ khóa hàng (`FOR UPDATE`) trên lô trong lúc chờ,
+    # nên đây cũng là thời gian tối đa các dòng đó bị khóa.
+    request_timeout_seconds: float = 10.0
 
 
 class OtelSettings(_EnvSettings):

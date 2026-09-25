@@ -43,6 +43,18 @@ class CustomerSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class RegisteredCustomer:
+    """Kết quả đăng ký khách tại quầy — FR-L02.
+
+    `created=False`: SĐT đã có ở cửa hàng này, trả về khách cũ thay vì tạo bản trùng.
+    Thu ngân gõ lại SĐT của khách quen là chuyện hằng ngày, không phải lỗi.
+    """
+
+    customer_id: uuid.UUID
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class PointsAccrual:
     """Kết quả một lần ghi ledger.
 

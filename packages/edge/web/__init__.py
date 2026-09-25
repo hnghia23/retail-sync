@@ -13,9 +13,11 @@ JS từ CDN, cửa hàng mất mạng thì trang trắng — vi phạm chính ng
 ## Đơn giản hóa có chủ đích (ghi rõ để không ai tưởng nhầm là đã đủ)
 
 - **Không tra cứu khách hàng** — mọi đơn qua UI đều là khách vãng lai
-  (`CustomerSnapshot.anonymous()`). Thác đổ Redis + trung tâm là việc của tuần 2 ngày 9.
-- **Mở ca qua route tạm** (`POST /ui/shifts/open`, INSERT trực tiếp) — route thật
-  `POST /shifts/open` (FR-P11) là việc của tuần 2 ngày 10, sẽ THAY THẾ route tạm này.
+  (`CustomerSnapshot.anonymous()`). Tra khách là việc của giai đoạn C (ADR-010): UI đóng
+  băng, dữ liệu khách của giai đoạn A/B đi qua `POST /api/v1/customers` từ bộ giả lập.
+- **Mở ca** (`POST /ui/shifts/open`) gọi đúng use case `open_shift()` của API, với
+  `business_date` = ngày theo giờ cửa hàng. Chưa có màn hình đóng ca — đóng ca qua
+  `POST /api/v1/shifts/{id}/close`.
 - **Không CSRF token** — máy POS trong LAN nội bộ cửa hàng, không lộ ra internet. Cần bổ
   sung nếu UI này lộ ra ngoài LAN.
 - **Giỏ hàng nằm ở server, đi vòng qua client bằng một hidden field JSON** — đúng triết lý

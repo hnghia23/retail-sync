@@ -11,14 +11,12 @@ qua route tạm, không CSRF).
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import text
 
 from edge.loyalty.api import CustomerSnapshot, build_loyalty_service
 from edge.pos.adapters.postgres import (
@@ -35,6 +33,7 @@ from edge.pos.application.place_sale import (
     SaleRejectedError,
     place_sale,
 )
+from edge.pos.application.shifts import OpenShiftCommand, ShiftRejectedError, open_shift
 from edge.settings import get_jwt_settings, get_pricing_rules, get_settings
 from edge.web.auth import require_role_from_cookie, set_login_cookie
 from edge.web.templates import templates
@@ -165,31 +164,31 @@ async def open_shift_submit(
     claims: Annotated[AccessTokenClaims, Depends(_CASHIER)],
     opening_cash: Annotated[int, Form(ge=0)],
 ) -> RedirectResponse:
-    """⚠️ STOPGAP — thay bởi `POST /shifts/open` thật (FR-P11) ở tuần 2 ngày 10.
+    """Gọi CÙNG use case `open_shift()` với `POST /api/v1/shifts/open` — không có logic riêng.
 
-    Ghi trực tiếp bằng SQL, không qua use case (chưa có use case mở ca). `business_date`
-    lấy tạm theo ngày UTC hiện tại — G5 (docs/05 §3.2) đòi người mở ca xác định tường
-    minh, use case thật sẽ sửa đúng chỗ này.
+    `business_date` = ngày theo giờ cửa hàng lúc bấm nút. Đây là lựa chọn của màn hình (UI
+    đóng băng tới giai đoạn C, ADR-010), không phải của use case: API bắt khai tường minh (G5).
+    Cửa hàng đã có ca mở → quay về màn hình bán hàng, nơi ca đó đang được dùng.
     """
     settings = get_settings()
-    async with transaction(request.app.state.session_factory) as session:
-        await session.execute(
-            text(
-                """
-                INSERT INTO shift (shift_id, store_id, business_date,
-                                  opened_by_employee_id, opening_cash)
-                VALUES (:shift_id, :store_id, :business_date, :employee_id, :opening_cash)
-                """
-            ),
-            {
-                "shift_id": uuid.uuid4(),
-                "store_id": settings.store_id,
-                "business_date": datetime.now(UTC).date(),
-                "employee_id": claims.employee_id,
-                "opening_cash": opening_cash,
-            },
-        )
-
+    offset = timedelta(minutes=settings.store_utc_offset_minutes)
+    opened_at = utcnow()
+    try:
+        async with transaction(request.app.state.session_factory) as session:
+            await open_shift(
+                OpenShiftCommand(
+                    store_id=settings.store_id,
+                    employee_id=claims.employee_id,
+                    business_date=(opened_at + offset).date(),
+                    opening_cash=opening_cash,
+                    opened_at=opened_at,
+                    store_utc_offset=offset,
+                ),
+                shifts=PostgresShifts(session),
+            )
+    except ShiftRejectedError as exc:
+        if exc.code != "SHIFT_ALREADY_OPEN":
+            raise
     return RedirectResponse("/ui/pos", status_code=303)
 
 

@@ -6,7 +6,7 @@ Chỉ có cấu hình kết nối. Không có model ORM ở đây — mỗi modu
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
@@ -17,12 +17,24 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
+def make_engine(
+    database_url: str,
+    *,
+    echo: bool = False,
+    server_settings: Mapping[str, str] | None = None,
+) -> AsyncEngine:
     """Engine async cho Postgres.
 
     `pool_pre_ping`: cửa hàng mất mạng/DB restart là chuyện thường ngày; không có nó thì
     request đầu sau khi nối lại sẽ lỗi vì connection chết trong pool.
+
+    `server_settings`: tham số Postgres gắn vào MỌI kết nối của engine này (gửi trong gói
+    khởi động, không tốn thêm round-trip). Đặt theo tiến trình chứ không `ALTER ROLE`, để
+    giới hạn của API không vô tình áp lên migration hay job bảo trì dùng chung role.
     """
+    connect_args: dict[str, object] = {}
+    if server_settings:
+        connect_args["server_settings"] = dict(server_settings)
     return create_async_engine(
         database_url,
         echo=echo,
@@ -30,6 +42,7 @@ def make_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
         max_overflow=10,
         pool_pre_ping=True,
         pool_recycle=1800,
+        connect_args=connect_args,
     )
 
 

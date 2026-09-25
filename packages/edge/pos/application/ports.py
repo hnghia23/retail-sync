@@ -40,7 +40,9 @@ __all__ = [
     "SalePaymentToPersist",
     "SaleRepositoryPort",
     "SaleToPersist",
+    "ShiftLifecyclePort",
     "ShiftPort",
+    "ShiftToClose",
 ]
 
 if TYPE_CHECKING:
@@ -61,6 +63,18 @@ class OpenShift:
     shift_id: uuid.UUID
     store_id: str
     business_date: date
+
+
+@dataclass(frozen=True, slots=True)
+class ShiftToClose:
+    """Ca đang mở, đã KHÓA để đóng — mọi thứ `ShiftClosed` cần lấy từ chính ca."""
+
+    shift_id: uuid.UUID
+    store_id: str
+    business_date: date
+    opened_by_employee_id: str
+    opened_at: datetime
+    opening_cash: Money
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +143,45 @@ class ShiftPort(Protocol):
     async def get_open_shift(self, shift_id: uuid.UUID) -> OpenShift | None:
         """`None` nếu ca không tồn tại hoặc đã đóng → `409` (docs/13 §3)."""
         ...
+
+
+class ShiftLifecyclePort(Protocol):
+    """Mở/đóng ca — FR-P11. Hiện thực ở `PostgresShifts`."""
+
+    async def open(
+        self,
+        *,
+        shift_id: uuid.UUID,
+        store_id: str,
+        business_date: date,
+        employee_id: str,
+        opening_cash: Money,
+        opened_at: datetime,
+    ) -> bool:
+        """`False` nếu cửa hàng đã có ca đang mở (mỗi cửa hàng tối đa MỘT ca mở)."""
+        ...
+
+    async def find_open_shift(self, store_id: str) -> OpenShift | None: ...
+
+    async def lock_open_for_close(self, shift_id: uuid.UUID, store_id: str) -> ShiftToClose | None:
+        """Khóa ca để đóng. PHẢI chặn được đơn đang chốt dở vào ca đó — xem adapter."""
+        ...
+
+    async def cash_collected(self, shift_id: uuid.UUID) -> Money:
+        """Σ tiền mặt đã thu trong ca (phần tiền mặt của đơn, không phải tiền khách đưa)."""
+        ...
+
+    async def mark_closed(
+        self,
+        *,
+        shift_id: uuid.UUID,
+        closed_by_employee_id: str,
+        closed_at: datetime,
+        expected_cash: Money,
+        counted_cash: Money,
+        variance: Money,
+        variance_note: str | None,
+    ) -> None: ...
 
 
 class SaleRepositoryPort(Protocol):

@@ -1,0 +1,27 @@
+# T1 — Pilot: 20 cửa hàng × 300 đơn/ngày (docs/02 §1). Ở chế độ `edge` chỉ chạy được số
+# cửa hàng có stack thật trong compose; đủ 20 cửa hàng là việc của chế độ `virtual`.
+# Mọi con số là giả định (docs/18 §4) — chỉnh ở đây khi có dữ liệu thật, không sửa code.
+name = "t1"
+stores = 20
+sales_per_store_day = 300
+open_hour = 7
+close_hour = 22
+# [giờ bắt đầu, giờ kết thúc (không gồm), tỉ lệ doanh số ngày] — hai đỉnh trưa/tối.
+peak_windows = [[11, 13, 0.25], [17, 20, 0.35]]
+weekend_factor = 1.3
+lines_extra_mean = 2.5
+zipf_s = 1.1
+price_rank_noise = 1.0
+qty_multi_share = 0.2
+qty_multi_max = 5
+identified_share = 0.6
+new_customer_share = 0.03
+shifts_per_day = 2
+opening_cash = 500000
+changeover_guard = 0.02
+
+[payment_mix]
+CASH = 0.70
+CARD = 0.20
+EWALLET = 0.05
+SPLIT = 0.05

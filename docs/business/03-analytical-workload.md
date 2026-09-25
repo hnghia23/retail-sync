@@ -119,6 +119,12 @@ Tốc độ gộp nhóm thực tế của PostgreSQL (có phân vùng + parallel
 **Toàn bộ tuần 3 của lộ trình phục vụ lớp truy vấn có tần suất thấp nhất, trong khi lớp có
 tần suất cao nhất chưa được thiết kế.**
 
+> 🔀 **Cập nhật 2026-09-23 — [ADR-010](../adr/010-data-flow-first.md).** Phát hiện ở trên vẫn
+> đúng: lớp A là lớp dùng nhiều nhất và phải đọc thẳng Postgres cửa hàng. Nhưng chủ dự án đã
+> chọn **làm luồng dữ liệu và bằng chứng ổn định trước**, nên báo cáo lớp A dời sang giai đoạn C.
+> Dời được mà không tốn gì về sau: lớp A chỉ là truy vấn **đọc** trên các bảng và index đã có
+> sẵn ở Postgres cửa hàng ([05 §3.6](../05-data-model.md)). Không đổi schema, không đổi luồng.
+
 Đây chính là loại sai lệch mà bài tập này sinh ra để phát hiện. Nó không lộ ra khi suy luận
 từ kiến trúc — chỉ lộ ra khi hỏi *"ai thực sự bấm nút, bao nhiêu lần một ngày?"*
 

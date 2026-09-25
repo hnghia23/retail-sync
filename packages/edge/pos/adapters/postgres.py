@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING, TypedDict
 from sqlalchemy import text
 
 from edge.pos.application.login import EmployeeAccount
-from edge.pos.application.ports import OpenShift, SaleToPersist
+from edge.pos.application.ports import OpenShift, SaleToPersist, ShiftToClose
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from datetime import date, datetime
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -101,13 +102,61 @@ class PostgresProductCatalog:
 
 
 class PostgresShifts:
-    """Hiện thực `ShiftPort`."""
+    """Hiện thực `ShiftPort` (đọc ca khi chốt đơn) và `ShiftLifecyclePort` (mở/đóng ca)."""
 
+    # `FOR SHARE`: đơn đang chốt giữ khóa chia sẻ trên ca từ lúc ĐỌC ca tới lúc commit. Nhiều
+    # đơn cùng lúc không chặn nhau (khóa chia sẻ tương thích nhau), nhưng đóng ca
+    # (`FOR UPDATE`) phải đợi chúng xong — và đơn đến SAU khi ca đã khóa để đóng sẽ đợi, rồi
+    # thấy `status = 'CLOSED'` và bị từ chối `409`.
+    #
+    # Khóa ngoại `sale → shift` (FOR KEY SHARE, cũng xung đột với FOR UPDATE) chỉ có hiệu lực
+    # từ lúc dòng `sale` được CHÈN. Khe hở là đoạn giữa đọc ca và chèn đơn: đóng ca lọt vào
+    # đó sẽ cộng tiền, commit, rồi đơn mới chèn vào một ca đã đóng — không có trong
+    # `expected_cash`. `test_close_waits_for_a_sale_that_is_committing` dừng đúng trong khe đó.
     _OPEN_SHIFT = text(
         """
         SELECT shift_id, store_id, business_date
         FROM shift
         WHERE shift_id = :shift_id AND status = 'OPEN'
+        FOR SHARE
+        """
+    )
+
+    _OPEN = text(
+        """
+        INSERT INTO shift (shift_id, store_id, business_date, opened_by_employee_id,
+                           opening_cash, opened_at)
+        VALUES (:shift_id, :store_id, :business_date, :employee_id, :opening_cash, :opened_at)
+        ON CONFLICT (store_id) WHERE status = 'OPEN' DO NOTHING
+        RETURNING shift_id
+        """
+    )
+
+    _LOCK_FOR_CLOSE = text(
+        """
+        SELECT shift_id, store_id, business_date, opened_by_employee_id, opened_at, opening_cash
+        FROM shift
+        WHERE shift_id = :shift_id AND store_id = :store_id AND status = 'OPEN'
+        FOR UPDATE
+        """
+    )
+
+    # Phần TIỀN MẶT của từng đơn (`sale_payment.amount`), không phải tiền khách đưa. Đơn trả
+    # hàng có số âm nên tự trừ đi — tiền mặt hoàn cho khách đúng là tiền rời két.
+    _CASH_COLLECTED = text(
+        """
+        SELECT COALESCE(sum(p.amount), 0)
+        FROM sale_payment p JOIN sale s ON s.sale_id = p.sale_id
+        WHERE s.shift_id = :shift_id AND p.method = 'CASH'
+        """
+    )
+
+    _MARK_CLOSED = text(
+        """
+        UPDATE shift SET status = 'CLOSED', closed_at = :closed_at,
+               closed_by_employee_id = :closed_by, expected_cash = :expected_cash,
+               counted_cash = :counted_cash, variance = :variance, variance_note = :variance_note
+        WHERE shift_id = :shift_id
         """
     )
 
@@ -149,6 +198,79 @@ class PostgresShifts:
             return None
         return OpenShift(
             shift_id=row.shift_id, store_id=row.store_id, business_date=row.business_date
+        )
+
+    async def open(
+        self,
+        *,
+        shift_id: uuid.UUID,
+        store_id: str,
+        business_date: date,
+        employee_id: str,
+        opening_cash: Money,
+        opened_at: datetime,
+    ) -> bool:
+        """Chèn trong MỘT câu lệnh có điều kiện: hai quầy cùng bấm mở ca thì một bên nhận
+        `False`, không có bên nào nổ unique violation giữa chừng transaction."""
+        row = (
+            await self._session.execute(
+                self._OPEN,
+                {
+                    "shift_id": shift_id,
+                    "store_id": store_id,
+                    "business_date": business_date,
+                    "employee_id": employee_id,
+                    "opening_cash": opening_cash,
+                    "opened_at": opened_at,
+                },
+            )
+        ).one_or_none()
+        return row is not None
+
+    async def lock_open_for_close(self, shift_id: uuid.UUID, store_id: str) -> ShiftToClose | None:
+        row = (
+            await self._session.execute(
+                self._LOCK_FOR_CLOSE, {"shift_id": shift_id, "store_id": store_id}
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return ShiftToClose(
+            shift_id=row.shift_id,
+            store_id=row.store_id,
+            business_date=row.business_date,
+            opened_by_employee_id=row.opened_by_employee_id,
+            opened_at=row.opened_at,
+            opening_cash=row.opening_cash,
+        )
+
+    async def cash_collected(self, shift_id: uuid.UUID) -> Money:
+        return int(
+            (await self._session.execute(self._CASH_COLLECTED, {"shift_id": shift_id})).scalar_one()
+        )
+
+    async def mark_closed(
+        self,
+        *,
+        shift_id: uuid.UUID,
+        closed_by_employee_id: str,
+        closed_at: datetime,
+        expected_cash: Money,
+        counted_cash: Money,
+        variance: Money,
+        variance_note: str | None,
+    ) -> None:
+        await self._session.execute(
+            self._MARK_CLOSED,
+            {
+                "shift_id": shift_id,
+                "closed_by": closed_by_employee_id,
+                "closed_at": closed_at,
+                "expected_cash": expected_cash,
+                "counted_cash": counted_cash,
+                "variance": variance,
+                "variance_note": variance_note,
+            },
         )
 
 
