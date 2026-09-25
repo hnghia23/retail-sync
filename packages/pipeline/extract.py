@@ -131,7 +131,10 @@ async def extract_incremental(
         raise ValueError(f"{spec.name} không phải bảng incremental")
 
     step = timedelta(seconds=window_seconds)
-    ends = [w.end for k in lake.list_table(spec.name) if (w := parse_window(k))]
+    # Chỉ phân vùng `dt=` mới nhất: cửa sổ nối tiếp nhau nên cửa sổ có mép cuối lớn nhất nằm ở
+    # đó. Liệt kê cả lake (~9 nghìn file/bảng/năm) ở mỗi lượt là quét toàn bộ mà ràng buộc #8 cấm
+    # cho job tăng dần — cùng lý do, ở chặng S4.
+    ends = [w.end for k in lake.latest_files(spec.name) if (w := parse_window(k))]
     if ends:
         start = max(ends)
     else:

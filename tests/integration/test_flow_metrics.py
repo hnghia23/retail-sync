@@ -20,6 +20,7 @@ import pytest
 from central.ingest import router as ingest_router
 from central.ingest.service import IngestStats
 from edge.health import read_outbox
+from edge.sync.worker import prune_sent
 from shared.types import utcnow
 from tests.integration.conftest import Central
 from tests.integration.test_sync_pipeline import (
@@ -113,3 +114,34 @@ async def test_outbox_snapshot_keeps_dead_letters_out_of_pending(edge: Any, edge
 
 def _only(**counts: int) -> dict[str, int]:
     return IngestStats(**counts).outcomes()
+
+
+async def test_prune_removes_only_sent_events_past_retention(edge: Any, edge_db: Any) -> None:
+    """Ràng buộc #9: outbox là bảng duy nhất tăng mãi. Dọn phải đúng một loại dòng — đã gửi quá
+    hạn giữ. Xóa nhầm dòng CHƯA gửi (cửa hàng offline nhiều ngày) là mất dữ liệu; xóa dead-letter
+    là mất dấu vết sự kiện còn chờ người xử lý."""
+    rows = {
+        "sent_old": ("now() - interval '10 days'", "now() - interval '10 days'", "NULL"),
+        "sent_recent": ("now() - interval '10 days'", "now() - interval '1 day'", "NULL"),
+        "unsent_old": ("now() - interval '10 days'", "NULL", "NULL"),
+        "dead_old": ("now() - interval '10 days'", "NULL", "now() - interval '9 days'"),
+    }
+    for kind, (created, sent, dead) in rows.items():
+        for _ in range(3):
+            await edge_db.execute(
+                "INSERT INTO outbox (event_type, payload, created_at, sent_at, dead_lettered_at)"  # noqa: S608
+                f" VALUES ($1, '{{}}', {created}, {sent}, {dead})",
+                kind,
+            )
+
+    pruned = await prune_sent(edge, retention_days=7, batch=2)  # lô nhỏ: đi qua vòng lặp nhiều lô
+
+    assert pruned == 3
+    left = {
+        r["event_type"]: r["n"]
+        for r in await edge_db.fetch(
+            "SELECT event_type, count(*) AS n FROM outbox GROUP BY event_type"
+        )
+    }
+    assert left == {"sent_recent": 3, "unsent_old": 3, "dead_old": 3}
+    assert await prune_sent(edge, retention_days=7) == 0  # chạy lại vô hại

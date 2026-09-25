@@ -283,6 +283,10 @@ kiểm bằng thực nghiệm trên đúng image của compose (ghim `grafana/ot
 | Tên đổi khi vào Prometheus: đơn vị `s` → `_seconds`, counter → `_total`, đơn vị `{…}` không thêm gì | Đặt tên instrument sao cho tên Prometheus đúng tên ở [08 §5](08-reliability-and-scale.md). Test `tests/unit/test_flow_dashboard.py` dựng danh mục tên từ chính code phát và đỏ khi dashboard dùng tên không ai phát |
 | Prometheus/Tempo/Loki ghi ở `/data` trong container | Named volume `otel_lgtm_data`: không có nó thì khởi động lại container là mất lịch sử — test ngâm 72h cần đúng lịch sử đó |
 
+**Log** (2026-09-25): JSON một dòng mỗi sự kiện, `trace_id`/`span_id` của span đang chạy — từ
+`docker logs` tra ngược được trace trong Tempo (`shared/logs.py`, structlog). **Cảnh báo**: 15 rule
+Grafana provision từ repo, cùng ngưỡng docs/08 §5.
+
 Chu kỳ đẩy: `OTEL_METRIC_EXPORT_INTERVAL=15000` (15 s) cho mọi tiến trình app trong compose; bộ
 giám sát đo mỗi 30 s (`FLOW_MONITOR_INTERVAL_SECONDS`).
 

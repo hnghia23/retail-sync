@@ -119,6 +119,13 @@ ngày 1 tháng sau mà partition chưa tồn tại → **mọi INSERT đều l�
 - **Kiểm tra hằng ngày**: partition của tháng sau đã tồn tại chưa → cảnh báo nếu chưa
 - Test: chỉnh đồng hồ tới tháng sau, xác nhận insert vẫn chạy
 
+> ✅ **2026-09-25 — hiện thực và một phát hiện.** Hàm `ensure_point_ledger_partitions()` có từ
+> tuần 1, nhưng **không có gì gọi nó** ngoài migration đầu (docstring ghi "gọi từ Airflow", DAG
+> chưa bao giờ gọi). Partition tạo sẵn tới 2026-12-01: hệ thống sẽ chết đúng 00:00 ngày 01/01/2027.
+> Giờ service `central-maintenance` (`central.ops.maintenance`) tạo trước + kiểm mỗi giờ, cùng
+> lượt với đối soát INV-4; vùng đệm lên dashboard (`point_ledger_partition_months_ahead`) và có
+> cảnh báo khi < 2 tháng. Test "chỉnh đồng hồ" vẫn chưa chạy.
+
 ### 4.2. Job đối soát phải tăng dần, không quét toàn bộ
 
 Job đối soát (AT-10) so `point_balance` với `SUM(point_ledger)`. Ở T3 đó là **584 triệu dòng
@@ -170,8 +177,10 @@ phải lúc đang cháy:
 > ✅ **Hiện thực (2026-09-25):** các chỉ số dưới đây là metric Prometheus thật trên dashboard
 > "Sức khỏe luồng dữ liệu" — tên metric và nơi phát ở [17 §6](17-data-flow.md). Chỉ số dạng tỉ
 > lệ (`sync_failure_rate`, `event_duplicate_rate`) là biểu thức PromQL trên counter
-> (`sync_push_failures_total`, `ingest_events_total{outcome="duplicate"}`). **Chưa có alert rule**
-> (roadmap ngày 19): ngưỡng mới được vẽ trên dashboard.
+> (`sync_push_failures_total`, `ingest_events_total{outcome="duplicate"}`). **15 alert rule** provision
+> từ `infra/observability/grafana/provisioning/alerting/retail-sync.yaml` (hiện ở Grafana → Alerting;
+> chưa có contact point, chưa kích hoạt thử từng rule). Không cảnh báo độ tươi / "cửa hàng không
+> thấy": ngoài giờ bán chúng tăng là bình thường, cần lịch giờ mở cửa trước.
 
 ### Chỉ số tại cửa hàng
 
@@ -197,7 +206,9 @@ phải lúc đang cháy:
 
 ### Log & truy vết
 
-- Log JSON có cấu trúc (`structlog`), **không** log chuỗi tự do
+- Log JSON có cấu trúc (`structlog`), **không** log chuỗi tự do — ✅ `shared/logs.py` (2026-09-25): code
+  vẫn gọi `logging.getLogger`, `structlog.stdlib.ProcessorFormatter` render MỌI dòng (cả uvicorn,
+  thư viện) thành JSON kèm `trace_id`/`span_id` của span đang chạy. `LOG_FORMAT=text` khi dev
 - `trace_id` sinh ở cửa hàng, đi theo sự kiện lên trung tâm và vào cả log warehouse
 - **Không bao giờ log PII** (tên, SĐT) — chỉ log `customer_id`
 - **Trace context phải truyền qua bảng `outbox`** để nối được giao dịch gốc với lần đồng bộ

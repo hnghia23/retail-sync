@@ -284,9 +284,11 @@ tên trong Prometheus.
 | S6 | đơn đã nạp mà fact chưa có | `pipeline_transform_pending_sales`, `pipeline_transform_lag_seconds` | > 1 chu kỳ DAG + 10 phút | flow-monitor |
 | Toàn luồng | **độ tươi** `now() - max(occurred_at)` ở L2 và L4 | `flow_freshness_seconds{layer, store_id}` | L2 < 5 phút (mạng tốt) · L4 < 1 chu kỳ DAG + 10 phút | flow-monitor |
 | Toàn luồng | **chênh đối soát** (§5) | `audit_status`, `audit_findings{level}`, `audit_behind_seconds{layer}` | **DIVERGED = sự cố nghiêm trọng nhất** | `simulator audit --otlp` |
-| Toàn luồng | lệch INV-4 đang mở, job còn chạy không | `reconcile_drift_count`, `reconcile_last_run_age_seconds` | > 0; > 1 ngày | flow-monitor |
+| Toàn luồng | lệch INV-4 đang mở, job bảo trì còn chạy không | `reconcile_drift_count`, `reconcile_last_run_age_seconds` | > 0; > 3 giờ | flow-monitor |
+| S3 (ràng buộc #2) | vùng đệm partition `point_ledger` | `point_ledger_partition_months_ahead` | < 2 tháng | flow-monitor |
 
-Dashboard gom đúng các chỉ số này theo chiều trái → phải: một hàng ô số "phải về 0", rồi
+Cảnh báo: 15 rule cùng ngưỡng ở `infra/observability/grafana/provisioning/alerting/retail-sync.yaml`
+(test `test_flow_dashboard.py` đỏ nếu rule dùng metric không ai phát). Dashboard gom đúng các chỉ số này theo chiều trái → phải: một hàng ô số "phải về 0", rồi
 S1 → S2 → S3 → S4–S6 → toàn luồng. Công cụ ở [10-observability](10-observability.md).
 
 **Ba nguồn phát, chia theo loại chỉ số:**

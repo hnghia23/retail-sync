@@ -3,7 +3,7 @@
 Chạy:
     uv run python -m central.ops.reconcile           # tăng dần (hằng ngày / mỗi giờ)
     uv run python -m central.ops.reconcile --full    # quét toàn bộ (mỗi tháng, giờ thấp điểm)
-    uv run python -m central.ops.reconcile --every 3600   # lịch: service `central-reconcile`
+    uv run python -m central.ops.reconcile --every 3600   # lặp (lịch thật: central.ops.maintenance)
 
 Tới 2026-09-25 job chỉ chạy tay (`make reconcile`, test AT-10). Dashboard "sức khỏe luồng" lộ ra
 điều đó ngay (`reconcile_last_run_age_seconds` = 16 giờ): "lệch = 0" của một job không chạy là

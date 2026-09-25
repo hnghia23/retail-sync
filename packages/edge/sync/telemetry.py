@@ -40,9 +40,12 @@ class SyncMetrics:
         self.batches = meter.create_counter(
             "sync_batches", unit="{batch}", description="Lô đã gửi và được trung tâm trả lời"
         )
+        self.pruned = meter.create_counter(
+            "sync_outbox_pruned", unit="{event}", description="Sự kiện đã gửi bị dọn khỏi outbox"
+        )
         # Có series ngay từ lúc khởi động: worker sống mà chưa gửi gì là đường 0 trên dashboard,
         # không phải "No data" — thứ trông y hệt worker chết.
-        for counter in (self.sent, self.push_failures, self.batches):
+        for counter in (self.sent, self.push_failures, self.batches, self.pruned):
             counter.add(0, self._attrs)
 
         from opentelemetry.metrics import Observation
@@ -56,6 +59,9 @@ class SyncMetrics:
             unit="{batch}",
             description="Số lần gửi lỗi đường truyền liên tiếp (0 = đang nối được trung tâm)",
         )
+
+    def record_pruned(self, n: int) -> None:
+        self.pruned.add(n, self._attrs)
 
     def record(self, report: BatchReport, *, consecutive_failures: int) -> None:
         self._consecutive_failures = consecutive_failures

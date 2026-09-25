@@ -164,9 +164,9 @@ thử nghiệm ở [08 §6](08-reliability-and-scale.md).
 | 17 | Backfill 7 ngày quá khứ (FR-C09) | Should |
 | 18 | **Test ngâm 72h** chạy nền (`edge` t0 + `virtual` t1): rò rỉ bộ nhớ, bloat `outbox`, trôi độ trễ, `audit` định kỳ | 🔴 Must — chạy nền trong ngày 18–20 |
 | 18 | **Đo overhead OTel:** chạy LD-1 hai lần, có và không có instrumentation | 🔴 Must — > 5% thì giảm tỉ lệ lấy mẫu ([ADR-009](adr/009-observability-stack.md)) |
-| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must |
-| 19 | Partition tháng sau **tự tồn tại**, test bằng cách chỉnh đồng hồ; job dọn `outbox` đã gửi > 7 ngày | 🔴 Must |
-| 20 | Backup + khôi phục Postgres cửa hàng (quy trình, chạy thử một lần) | Must |
+| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must — 2026-09-25: ✅ 15 rule provision từ repo (đánh giá được, `inactive`), ✅ log JSON + `trace_id`. ⏳ **kích hoạt thử** từng rule (cùng test hỗn loạn) · chưa có contact point |
+| 19 | Partition tháng sau **tự tồn tại**, test bằng cách chỉnh đồng hồ; job dọn `outbox` đã gửi > 7 ngày | 🔴 Must — 2026-09-25: ✅ lịch `central-maintenance` (trước đó **không có gì gọi** hàm tạo partition — xem [progress](progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ dọn outbox trong sync worker. ⏳ thử bằng chỉnh đồng hồ |
+| 20 | Backup + khôi phục Postgres cửa hàng (quy trình, chạy thử một lần) | Must — 2026-09-25: ✅ sidecar `edge-backup-*` (hằng ngày, giữ 7), ✅ `store_backup.py verify` đã chạy (khôi phục vào DB tạm, 7 bảng khớp). ⏳ `restore` thật trên DB cửa hàng chưa chạy thử |
 | 20 | Cập nhật docs bằng số liệu đo thật; README chạy thử từ `git clone` | |
 
 ### 🚪 Cổng B (nghiệm thu POC)

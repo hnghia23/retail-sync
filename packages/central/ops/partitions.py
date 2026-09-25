@@ -8,7 +8,7 @@
 Vì vậy có hai hàm chứ không một: `ensure_partitions()` để *sửa*, và `check_health()` để
 *biết trước khi phải sửa*. Chạy hằng ngày, cảnh báo khi vùng đệm tụt dưới ngưỡng.
 
-Gọi từ Airflow (`data_platform/airflow/dags/`) hoặc thủ công:
+Lịch: `central.ops.maintenance` (service compose `central-maintenance`, mỗi giờ). Thủ công:
     uv run python -m central.ops.partitions
 """
 

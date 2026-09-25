@@ -39,6 +39,17 @@ x-postgres-common: &postgres-common
     timeout: 5s
     retries: 10
 
+# Backup Postgres cửa hàng hằng ngày (RPO ≤ 24h, docs/01; B02 I06) — infra/backup/pg_backup.sh.
+# Image postgres:18 vì nó có sẵn pg_dump/pg_restore cùng bản với server. Ghi vào volume chung
+# `edge_backups` (mỗi cửa hàng một thư mục). Kiểm/khôi phục: `uv run python infra/store_backup.py`.
+x-edge-backup: &edge-backup
+  image: postgres:18
+  restart: unless-stopped
+  entrypoint: ["sh", "/scripts/pg_backup.sh"]
+  volumes:
+    - ./backup:/scripts:ro
+    - edge_backups:/backups
+
 # Biến của `packages/pipeline` (S4/S5 + bộ giám sát luồng), cùng tên với CLI `python -m pipeline`
 # và profile dbt — dùng chung cho Airflow và `flow-monitor`, một chỗ khai báo.
 x-pipeline-env: &pipeline-env
@@ -145,6 +156,20 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: sync-worker-store-001
 
+  edge-backup-store-001:
+    <<: *edge-backup
+    profiles: ["edge"]
+    depends_on:
+      edge-db-store-001: { condition: service_healthy }
+    environment:
+      STORE_ID: store-001
+      PGHOST: edge-db-store-001
+      PGUSER: ${EDGE_DB_USER:-edge_app}
+      PGPASSWORD: ${EDGE_DB_PASSWORD}
+      PGDATABASE: edge_store_001
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+
   # ═══════════════════════ EDGE ×3 (profile: edge-multi) ═══════════════════════
   # store-002, store-003 — bản sao của store-001 cho cổng A ("t0 3 cửa hàng chạy 2 giờ", docs/06)
   # và AT-04 nhiều cửa hàng. Profile riêng để `--profile edge` mặc định vẫn là MỘT cửa hàng
@@ -204,6 +229,20 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: sync-worker-store-002
 
+  edge-backup-store-002:
+    <<: *edge-backup
+    profiles: ["edge-multi"]
+    depends_on:
+      edge-db-store-002: { condition: service_healthy }
+    environment:
+      STORE_ID: store-002
+      PGHOST: edge-db-store-002
+      PGUSER: ${EDGE_DB_USER:-edge_app}
+      PGPASSWORD: ${EDGE_DB_PASSWORD}
+      PGDATABASE: edge_store_002
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+
   edge-db-store-003:
     <<: *postgres-common
     profiles: ["edge-multi"]
@@ -258,6 +297,20 @@ services:
       OTEL_METRIC_EXPORT_INTERVAL: "15000"
       OTEL_SERVICE_NAME: sync-worker-store-003
 
+  edge-backup-store-003:
+    <<: *edge-backup
+    profiles: ["edge-multi"]
+    depends_on:
+      edge-db-store-003: { condition: service_healthy }
+    environment:
+      STORE_ID: store-003
+      PGHOST: edge-db-store-003
+      PGUSER: ${EDGE_DB_USER:-edge_app}
+      PGPASSWORD: ${EDGE_DB_PASSWORD}
+      PGDATABASE: edge_store_003
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+
   # ═══════════════════════ CENTRAL (profile: central) ═══════════════════════
 
   central-db:
@@ -285,12 +338,12 @@ services:
       OTEL_SERVICE_NAME: central-api
     ports: ["8000:8000"]
 
-  # Job đối soát INV-4 tăng dần theo lịch (ràng buộc #8, DI-1, AT-10). Tới 2026-09-25 nó chỉ chạy
-  # tay — dashboard "sức khỏe luồng" lộ ra điều đó. Chỉ BÁO lệch (bảng `reconciliation_drift`),
-  # không tự sửa: sửa snapshot điểm là sửa tiền của khách.
-  central-reconcile:
+  # Bảo trì định kỳ của trung tâm (`central.ops.maintenance`): tạo trước partition `point_ledger`
+  # (ràng buộc #2 — tới 2026-09-25 không có gì gọi nó, hệ thống sẽ chết ở tháng hết partition) rồi
+  # đối soát INV-4 tăng dần (ràng buộc #8, DI-1). Chỉ BÁO lệch, không tự sửa tiền của khách.
+  central-maintenance:
     build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
-    command: ["python", "-m", "central.ops.reconcile", "--every", "${RECONCILE_INTERVAL_SECONDS:-3600}"]
+    command: ["python", "-m", "central.ops.maintenance", "--every", "${MAINTENANCE_INTERVAL_SECONDS:-3600}"]
     profiles: ["central"]
     restart: unless-stopped
     depends_on:
@@ -420,6 +473,8 @@ services:
       # Dashboard "sức khỏe luồng" (docs/17 §6) — file trong repo, provision lúc khởi động.
       - ./observability/grafana/provisioning/retail-sync.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/retail-sync.yaml:ro
       - ./observability/grafana/dashboards:/otel-lgtm/retail-sync-dashboards:ro
+      # Ngưỡng cảnh báo docs/08 §5 (15 rule) — hiện ở Grafana → Alerting, chưa có contact point.
+      - ./observability/grafana/provisioning/alerting/retail-sync.yaml:/otel-lgtm/grafana/conf/provisioning/alerting/retail-sync.yaml:ro
 
   # Bộ giám sát luồng (`python -m pipeline monitor`, packages/pipeline/monitor.py): đọc trạng thái
   # S3–S6 (Postgres trung tâm, lake, ClickHouse) mỗi 30 s, đẩy OTLP cho dashboard. Chỉ ĐỌC.
@@ -450,3 +505,4 @@ volumes:
   airflow_db:
   metabase_data:
   otel_lgtm_data:
+  edge_backups:

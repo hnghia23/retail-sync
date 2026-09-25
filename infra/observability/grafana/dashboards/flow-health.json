@@ -217,8 +217,8 @@
     {
       "type": "stat",
       "id": 4,
-      "title": "Đối soát INV-4 chạy cách đây",
-      "description": "Job tăng dần central.ops.reconcile. Lệch = 0 chỉ có nghĩa khi job còn chạy (DI-1 hằng ngày).",
+      "title": "Bảo trì trung tâm chạy cách đây",
+      "description": "central-maintenance (mỗi giờ): partition point_ledger + đối soát INV-4. Lệch = 0 chỉ có nghĩa khi job còn chạy. > 3 giờ = lịch đã chết.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -268,7 +268,7 @@
               },
               {
                 "color": "red",
-                "value": 86400
+                "value": 10800
               }
             ]
           },
@@ -621,21 +621,277 @@
       }
     },
     {
-      "type": "row",
+      "type": "stat",
       "id": 10,
+      "title": "Partition point_ledger còn",
+      "description": "Số tháng partition tạo sẵn (ràng buộc #2). < 2 = lịch central-maintenance đã ngừng; về 0 là mọi sự kiện có điểm bị từ chối.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "min(point_ledger_partition_months_ahead)",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "flow-monitor không chạy",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 11,
+      "title": "Cửa hàng không thấy > 1 giờ",
+      "description": "stores_not_seen_recently (docs/08 §5). Ngoài giờ bán tăng là bình thường — chỉ đáng lo trong giờ mở cửa.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "count(max by (store_id) (store_last_seen_age_seconds) > 3600) or vector(0)",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "—",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "Lô bị từ chối vì quá tải (1 giờ)",
+      "description": "503 backpressure của POST /events. Có thì cửa hàng lùi rồi gửi lại (không mất gì); kéo dài = trung tâm thiếu sức chứa.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(ingest_batches_refused_total[1h])) or vector(0)",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "noValue": "—",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "Tỉ lệ sự kiện gửi trùng (1 giờ)",
+      "description": "event_duplicate_rate (docs/08 §5): idempotency đang làm việc. Tăng vọt = cửa hàng gửi lại nhiều (mạng chập chờn, timeout).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(ingest_events_total{outcome=\"duplicate\"}[1h])) / clamp_min(sum(increase(ingest_events_total[1h])), 1)",
+          "instant": true
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "—",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "id": 14,
       "title": "S1 — Ghi tại cửa hàng (POST /sales, p95 < 500 ms)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 9
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 11,
+      "id": 15,
       "title": "POST /sales p95",
       "description": "Instrumentation FastAPI (semconv HTTP ổn định). Đường đỏ: NFR-02 500 ms.",
       "datasource": {
@@ -646,7 +902,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 6
+        "y": 10
       },
       "targets": [
         {
@@ -713,7 +969,7 @@
     },
     {
       "type": "timeseries",
-      "id": 12,
+      "id": 16,
       "title": "Request /sales mỗi giây và lỗi 5xx",
       "description": "",
       "datasource": {
@@ -724,7 +980,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 10
       },
       "targets": [
         {
@@ -787,20 +1043,20 @@
     },
     {
       "type": "row",
-      "id": 13,
+      "id": 17,
       "title": "S2 — Đẩy lên trung tâm (outbox → POST /events)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 18
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 14,
+      "id": 18,
       "title": "Sự kiện chờ cũ nhất theo cửa hàng",
       "description": "Đo ở Edge API, không ở worker (worker chết đúng là lúc outbox dồn). Không tính dead-letter.",
       "datasource": {
@@ -811,7 +1067,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 15
+        "y": 19
       },
       "targets": [
         {
@@ -878,7 +1134,7 @@
     },
     {
       "type": "timeseries",
-      "id": 15,
+      "id": 19,
       "title": "Outbox chờ gửi theo cửa hàng",
       "description": "",
       "datasource": {
@@ -889,7 +1145,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 15
+        "y": 19
       },
       "targets": [
         {
@@ -956,7 +1212,7 @@
     },
     {
       "type": "timeseries",
-      "id": 16,
+      "id": 20,
       "title": "Sync worker: gửi được / lỗi đường truyền / bị từ chối",
       "description": "Lỗi đường truyền (mất mạng/401/503) KHÁC trung tâm từ chối — không tính lượt thử (AT-02).",
       "datasource": {
@@ -967,7 +1223,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 15
+        "y": 19
       },
       "targets": [
         {
@@ -1039,20 +1295,20 @@
     },
     {
       "type": "row",
-      "id": 17,
+      "id": 21,
       "title": "S3 — Áp ở trung tâm (ingest, p95 < 1 s)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 23
+        "y": 27
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 18,
+      "id": 22,
       "title": "POST /events p95 / p99",
       "description": "",
       "datasource": {
@@ -1063,7 +1319,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 24
+        "y": 28
       },
       "targets": [
         {
@@ -1139,7 +1395,7 @@
     },
     {
       "type": "timeseries",
-      "id": 19,
+      "id": 23,
       "title": "Sự kiện nhận theo kết cục",
       "description": "duplicate = gửi lại (idempotency đang làm việc). rejected_permanent → dead-letter.",
       "datasource": {
@@ -1150,7 +1406,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 24
+        "y": 28
       },
       "targets": [
         {
@@ -1213,7 +1469,7 @@
     },
     {
       "type": "timeseries",
-      "id": 20,
+      "id": 24,
       "title": "Trễ đồng bộ theo cửa hàng",
       "description": "recorded_at − occurred_at của lô gần nhất (FR-C10). > 900 s = LAGGING.",
       "datasource": {
@@ -1224,7 +1480,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 24
+        "y": 28
       },
       "targets": [
         {
@@ -1291,7 +1547,7 @@
     },
     {
       "type": "timeseries",
-      "id": 21,
+      "id": 25,
       "title": "Lần cuối cửa hàng gửi được",
       "description": "stores_not_seen_recently = số series > 3600. Ngoài giờ bán tăng là bình thường.",
       "datasource": {
@@ -1302,7 +1558,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 24
+        "y": 28
       },
       "targets": [
         {
@@ -1369,20 +1625,20 @@
     },
     {
       "type": "row",
-      "id": 22,
+      "id": 26,
       "title": "S4 → S6 — Trích xuất, nạp, biến đổi (mép theo recorded_at)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 36
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 23,
+      "id": 27,
       "title": "S4 mép trích xuất",
       "description": "Răng cưa theo chu kỳ DAG là bình thường. extract_horizon trễ ≫ 30 s = transaction treo giữ mép (bẫy 1).",
       "datasource": {
@@ -1393,7 +1649,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 33
+        "y": 37
       },
       "targets": [
         {
@@ -1456,7 +1712,7 @@
     },
     {
       "type": "timeseries",
-      "id": 24,
+      "id": 28,
       "title": "S5 mép nạp ClickHouse",
       "description": "Trùng S4 sau mỗi lượt. Cách xa S4 = nạp chết giữa chừng.",
       "datasource": {
@@ -1467,7 +1723,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 33
+        "y": 37
       },
       "targets": [
         {
@@ -1530,7 +1786,7 @@
     },
     {
       "type": "timeseries",
-      "id": 25,
+      "id": 29,
       "title": "S6 đơn chờ dbt dựng",
       "description": "Đơn đã nạp dưới mép mà fact chưa có (bẫy 5). Về 0 sau mỗi lượt dbt.",
       "datasource": {
@@ -1541,7 +1797,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 33
+        "y": 37
       },
       "targets": [
         {
@@ -1595,20 +1851,20 @@
     },
     {
       "type": "row",
-      "id": 26,
+      "id": 30,
       "title": "Toàn luồng — độ tươi L2/L4 và đối soát xuyên tầng",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 45
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "id": 27,
+      "id": 31,
       "title": "Độ tươi theo tầng và cửa hàng",
       "description": "now − occurred_at mới nhất. Giờ bán: L2 < 5 phút, L4 < 1 chu kỳ DAG + 10 phút (docs/17 §6).",
       "datasource": {
@@ -1619,7 +1875,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 42
+        "y": 46
       },
       "targets": [
         {
@@ -1682,7 +1938,7 @@
     },
     {
       "type": "timeseries",
-      "id": 28,
+      "id": 32,
       "title": "Audit: tầng tụt sau tầng tươi nhất",
       "description": "Từ simulator audit (--watch). 0 ở mọi tầng = đã bắt kịp. Đúng cả ở chế độ virtual.",
       "datasource": {
@@ -1693,7 +1949,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 42
+        "y": 46
       },
       "targets": [
         {
@@ -1747,7 +2003,7 @@
     },
     {
       "type": "timeseries",
-      "id": 29,
+      "id": 33,
       "title": "Audit: phát hiện theo mức",
       "description": "CONVERGING = đang chảy (bình thường). DIVERGED > 0 = sự cố.",
       "datasource": {
@@ -1758,7 +2014,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 42
+        "y": 46
       },
       "targets": [
         {

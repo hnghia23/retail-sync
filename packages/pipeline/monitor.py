@@ -54,6 +54,7 @@ METRICS: dict[str, str] = {
     "dead_letter_events": "Sự kiện trung tâm đã vứt vào dead-letter, theo cửa hàng",
     "reconcile_drift_count": "Lệch INV-4 (số dư ≠ Σ sổ cái) đang mở — nghiêm trọng nhất",
     "reconcile_last_run_age_seconds": "Thời gian từ lần đối soát INV-4 cuối",
+    "point_ledger_partition_months_ahead": "Tháng partition point_ledger tạo sẵn (< 2 = nguy)",
     # S4 — trích xuất
     "pipeline_extract_horizon_lag_seconds": "now - extract_horizon(): lớn = transaction treo",
     "pipeline_extract_watermark_age_seconds": "now - mép cuối file bronze cuối, theo bảng",
@@ -170,6 +171,11 @@ async def _central(health: FlowHealth, cfg: PipelineConfig) -> None:
         )
         if last_run is not None:
             health.add("reconcile_last_run_age_seconds", health.age(last_run))
+
+        # Ràng buộc #2: hết partition = mọi sự kiện có điểm bị từ chối. View chỉ đọc catalog.
+        ahead = await conn.fetchval("SELECT months_ahead FROM point_ledger_partition_health")
+        if ahead is not None:
+            health.add("point_ledger_partition_months_ahead", ahead)
 
         # Cùng hàm mà S4 dùng làm mép cửa sổ (docs/17 §4 bẫy 1). Trễ xa hơn `safety_lag` nghĩa
         # là có transaction mở lâu đang giữ trích xuất đứng lại — an toàn, nhưng phải thấy.

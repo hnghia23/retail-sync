@@ -1,0 +1,948 @@
+# Ngưỡng cảnh báo docs/08 §5 + docs/17 §6 — provision vào Grafana của otel-lgtm lúc khởi động.
+# SINH TỪ SCRIPT, cùng khuôn cho mọi rule; sửa ngưỡng ở đây thì sửa cả docs/08 §5.
+# Không có rule cho độ tươi / "cửa hàng không thấy": ngoài giờ bán chúng tăng là bình thường —
+# cần lịch giờ mở cửa trước. Chưa có contact point: cảnh báo hiện ở Grafana → Alerting.
+# (YAML là tập cha của JSON: file này là JSON để không cần thư viện YAML khi sinh.)
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "luong-du-lieu",
+      "folder": "retail-sync",
+      "interval": "1m",
+      "rules": [
+        {
+          "uid": "rs-drift",
+          "title": "Lệch INV-4: số dư điểm ≠ Σ sổ cái",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(reconcile_drift_count)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "critical",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Lệch INV-4: số dư điểm ≠ Σ sổ cái",
+            "description": "Sai số điểm là sai tiền của khách (docs/08 §5 reconcile_drift_count). Xem bảng reconciliation_drift."
+          }
+        },
+        {
+          "uid": "rs-audit-diverged",
+          "title": "Đối soát xuyên tầng DIVERGED",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(audit_status)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        1
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "critical",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Đối soát xuyên tầng DIVERGED",
+            "description": "simulator audit báo tầng thừa/sai/mất (docs/17 §5). Xem runs/<id>/audit.json."
+          }
+        },
+        {
+          "uid": "rs-partition",
+          "title": "Partition point_ledger sắp cạn",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "min(point_ledger_partition_months_ahead)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "lt",
+                      "params": [
+                        2
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "critical",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Partition point_ledger sắp cạn",
+            "description": "Ràng buộc #2: về 0 là mọi sự kiện có điểm bị từ chối. Kiểm service central-maintenance."
+          }
+        },
+        {
+          "uid": "rs-dead-letter",
+          "title": "Có sự kiện vào dead-letter",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "(sum(dead_letter_events) or vector(0)) + (sum(outbox_dead_lettered) or vector(0))",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Có sự kiện vào dead-letter",
+            "description": "Sự kiện không bao giờ được áp nữa (docs/17 §6 S3). Cần người xem dead_letter_event / outbox."
+          }
+        },
+        {
+          "uid": "rs-outbox-oldest",
+          "title": "Dữ liệu cửa hàng trễ hơn 1 giờ",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(outbox_oldest_unsent_age_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        3600
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Dữ liệu cửa hàng trễ hơn 1 giờ",
+            "description": "Chỉ số sức khỏe quan trọng nhất (docs/08 §5). Mạng cửa hàng hoặc trung tâm có vấn đề."
+          }
+        },
+        {
+          "uid": "rs-outbox-depth",
+          "title": "Outbox tồn đọng > 5000",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(outbox_depth)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        5000
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Outbox tồn đọng > 5000",
+            "description": "Đồng bộ đang tắc (docs/08 §5 outbox_depth)."
+          }
+        },
+        {
+          "uid": "rs-sync-failure-rate",
+          "title": "Tỉ lệ gửi lỗi > 10% (5 phút)",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(sync_push_failures_total[5m])) / clamp_min(sum(rate(sync_push_failures_total[5m])) + sum(rate(sync_batches_total[5m])), 1e-9)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.1
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Tỉ lệ gửi lỗi > 10% (5 phút)",
+            "description": "sync_failure_rate (docs/08 §5): lỗi ĐƯỜNG TRUYỀN, không tính lượt thử (AT-02)."
+          }
+        },
+        {
+          "uid": "rs-store-lag",
+          "title": "Cửa hàng trễ đồng bộ > 15 phút",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(store_sync_lag_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        900
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Cửa hàng trễ đồng bộ > 15 phút",
+            "description": "store_sync_lag_seconds (FR-C10). Chế độ virtual có occurred_at trong quá khứ: bỏ qua khi đang giả lập virtual."
+          }
+        },
+        {
+          "uid": "rs-ingest-p95",
+          "title": "POST /events p95 > 1 s",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_request_duration_seconds_bucket{job=\"central-api\", http_route=\"/api/v1/events\"}[5m])))",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        1
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "POST /events p95 > 1 s",
+            "description": "Ngân sách S3 (docs/17 §6)."
+          }
+        },
+        {
+          "uid": "rs-sales-p95",
+          "title": "POST /sales p95 > 500 ms",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "histogram_quantile(0.95, sum by (le, job) (rate(http_server_request_duration_seconds_bucket{job=~\"edge-api-.*\", http_route=\"/api/v1/sales\"}[5m])))",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.5
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "10m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "POST /sales p95 > 500 ms",
+            "description": "NFR-02 — chốt đơn tại quầy."
+          }
+        },
+        {
+          "uid": "rs-horizon",
+          "title": "Trích xuất đứng lại: có transaction mở lâu",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(pipeline_extract_horizon_lag_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        300
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Trích xuất đứng lại: có transaction mở lâu",
+            "description": "extract_horizon() bị một transaction mở lâu giữ lại (bẫy 1). An toàn nhưng luồng ngừng tiến. Xem pg_stat_activity."
+          }
+        },
+        {
+          "uid": "rs-loaded-until",
+          "title": "Mép 'đã nạp tới' đứng > 3 giờ",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(pipeline_loaded_until_age_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        10800
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Mép 'đã nạp tới' đứng > 3 giờ",
+            "description": "S4/S5 không chạy: > 2 chu kỳ DAG + cửa sổ (docs/17 §6). Xem Airflow."
+          }
+        },
+        {
+          "uid": "rs-transform",
+          "title": "Mart tụt sau bronze > 70 phút",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(pipeline_transform_lag_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        4200
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Mart tụt sau bronze > 70 phút",
+            "description": "S6: dbt không dựng kịp (1 chu kỳ DAG + 10 phút)."
+          }
+        },
+        {
+          "uid": "rs-maintenance",
+          "title": "Bảo trì trung tâm không chạy > 3 giờ",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "max(reconcile_last_run_age_seconds)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        10800
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Bảo trì trung tâm không chạy > 3 giờ",
+            "description": "central-maintenance chạy mỗi giờ: 3 lượt liền không chạy thì partition + đối soát INV-4 đều đứng."
+          }
+        },
+        {
+          "uid": "rs-monitor",
+          "title": "Bộ giám sát mất nguồn hoặc không chạy",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "min(flow_monitor_source_up)",
+                "instant": true,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "reduce",
+                "expression": "A",
+                "reducer": "max"
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "B",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "lt",
+                      "params": [
+                        1
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Error",
+          "for": "5m",
+          "labels": {
+            "severity": "warning",
+            "project": "retail-sync"
+          },
+          "annotations": {
+            "summary": "Bộ giám sát mất nguồn hoặc không chạy",
+            "description": "flow-monitor không đọc được Postgres trung tâm/lake/ClickHouse — hoặc không chạy (không có dữ liệu cũng báo)."
+          }
+        }
+      ]
+    }
+  ]
+}

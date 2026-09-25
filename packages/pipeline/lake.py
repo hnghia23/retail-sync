@@ -64,10 +64,10 @@ class Lake:
     def latest_files(self, table: str) -> list[str]:
         """Các file trong phân vùng `dt=` MỚI NHẤT của bảng, sắp theo tên.
 
-        Cho bộ giám sát (`pipeline.monitor`), đo mỗi 30 giây: `list_table` liệt kê mọi file
-        từ ngày đầu (một file/giờ/bảng → ~9 nghìn file/năm/bảng), còn đây chỉ liệt kê thư mục
-        `dt=` rồi một thư mục. Đúng vì tên phân vùng là ngày của MÉP ĐẦU cửa sổ và cửa sổ nối
-        tiếp nhau: cửa sổ có mép cuối lớn nhất cũng có mép đầu lớn nhất.
+        Cho bước trích xuất (tìm mép cửa sổ cuối) và bộ giám sát (đo mỗi 30 giây): `list_table`
+        liệt kê mọi file từ ngày đầu (một file/giờ/bảng → ~9 nghìn file/năm/bảng), còn đây chỉ
+        liệt kê thư mục `dt=` rồi một thư mục. Đúng vì tên phân vùng là ngày của MÉP ĐẦU cửa sổ
+        và cửa sổ nối tiếp nhau: cửa sổ có mép cuối lớn nhất cũng có mép đầu lớn nhất.
         """
         base = f"{self.cfg.bucket}/{self.cfg.prefix}/{table}"
         if self.fs.get_file_info(base).type == pafs.FileType.NotFound:

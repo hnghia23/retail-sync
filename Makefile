@@ -110,6 +110,14 @@ sim-virtual:  ## Bo gia lap che do virtual (20 cua hang ao -> POST /events). PRO
 sim-audit:  ## Doi soat MANIFEST L0-L2 (EDGE_DSN, CENTRAL_DSN); them CLICKHOUSE=http://u:p@host:8123/dw de co L3+L4; WATCH=300 lap lai; OTLP=http://localhost:4318 day len dashboard
 	uv run python -m simulator audit --manifest $(MANIFEST) --edge-dsn store-001=$(EDGE_DSN) --central-dsn $(CENTRAL_DSN) --wait $(or $(WAIT),120) $(if $(CLICKHOUSE),--clickhouse $(CLICKHOUSE) --marts,) $(if $(WATCH),--watch $(WATCH),) $(if $(OTLP),--otlp $(OTLP),)
 
+.PHONY: backup-verify
+backup-verify:  ## Khoi phuc THU ban backup moi nhat cua cua hang vao DB tam, so so dong (khong dung DB that). STORE
+	uv run python infra/store_backup.py verify --store $(or $(STORE),store-001)
+
+.PHONY: maintenance
+maintenance:  ## Mot luot bao tri trung tam: tao truoc partition point_ledger + doi soat INV-4 (can DATABASE_URL)
+	uv run python -m central.ops.maintenance
+
 .PHONY: reconcile
 reconcile:  ## Doi soat INV-4 tang dan o trung tam (can DATABASE_URL). FULL=1 de quet toan bo
 	uv run python -m central.ops.reconcile $(if $(FULL),--full,)

@@ -49,6 +49,7 @@ async def test_empty_flow_reports_sources_up_and_no_fake_stage_numbers(env: Env)
     for source in ("central_pg", "lake", "clickhouse"):
         assert health.value("flow_monitor_source_up", source=source) == 1
     assert health.value("reconcile_drift_count") == 0
+    assert health.value("point_ledger_partition_months_ahead") == 3  # migration tạo sẵn 3 tháng
     assert health.value("pipeline_loaded_until_age_seconds") is None
     assert not [s for s in health.samples if s.name == "pipeline_extract_watermark_age_seconds"]
     # safety_lag = 0 và không có transaction nào khác đang mở: mép gần như là "bây giờ".

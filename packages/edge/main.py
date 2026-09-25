@@ -27,6 +27,7 @@ from edge.settings import get_otel_settings, get_settings
 from edge.web.auth import RequiresLoginError, requires_login_handler
 from edge.web.router import router as web_router
 from shared.db import make_engine, make_session_factory
+from shared.logs import setup_logging
 from shared.metrics import get_meter, setup_metrics
 from shared.tracing import instrument_clients, instrument_fastapi, setup_tracing
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
 
     # OTel gắn TỪ ĐẦU — roadmap ngày 5 ghi rõ: thêm sau đắt hơn nhiều (ADR-009). Metric trước
     # `instrument_fastapi()`: instrumentation lấy meter + lựa chọn semconv lúc gắn vào app.
+    setup_logging(f"edge-api-{settings.store_id}")
     setup_tracing(f"edge-api-{settings.store_id}", settings=get_otel_settings())
     setup_metrics(f"edge-api-{settings.store_id}", settings=get_otel_settings())
 

@@ -14,8 +14,10 @@ compose**. **🚪 Cổng A ĐẠT (2026-09-24)**, cả 8 điều kiện kiểm t
 [docs/progress/2026-09-24-cong-a.md](docs/progress/2026-09-24-cong-a.md). **Giai đoạn B** đang chạy
 ([06](docs/06-roadmap.md)): ✅ dashboard "sức khỏe luồng" (2026-09-25,
 [nhật ký](docs/progress/2026-09-25-giai-doan-b-dashboard.md)), ✅ job CI `scenarios` +
-`infra/bootstrap.py` ([nhật ký](docs/progress/2026-09-25-giai-doan-b-ci.md)). Tiếp theo: test hỗn
-loạn CH-1…7.
+`infra/bootstrap.py` ([nhật ký](docs/progress/2026-09-25-giai-doan-b-ci.md)), ✅ vá vận hành: lịch
+partition + INV-4, dọn outbox, log JSON, 15 cảnh báo, backup cửa hàng
+([nhật ký](docs/progress/2026-09-25-giai-doan-b-van-hanh.md)). Test ngâm 72h **hoãn** (máy cần cho
+việc khác). Tiếp theo: test hỗn loạn CH-1…7 (kích hoạt thử cảnh báo cùng lúc).
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 
@@ -78,6 +80,11 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
   (service `flow-monitor`) đọc. Thêm/đổi tên metric → sửa `flow-health.json` (test
   `test_flow_dashboard.py` đỏ nếu lệch). **Mật khẩu không bao giờ trong URL** (httpx log URL ở INFO):
   ClickHouse đăng nhập bằng header.
+
+- **Việc có lịch ở trung tâm = `central-maintenance`** (partition `point_ledger` trước 3 tháng + đối
+  soát INV-4, mỗi giờ). Hàm tạo partition từng không được ai gọi — thêm việc định kỳ mới thì gắn vào
+  đây, đừng để nó chỉ nằm trong docstring. Backup cửa hàng: sidecar `edge-backup-*`, kiểm bằng
+  `infra/store_backup.py verify`. Log: `shared.logs.setup_logging()` (JSON + `trace_id`).
 
 **Sync worker — quy tắc không được phá:** mất mạng/401/503 là lỗi của ĐƯỜNG TRUYỀN, không bao
 giờ tăng `outbox.attempts`. Chỉ khi trung tâm xét và từ chối một sự kiện mới tính lượt thử.

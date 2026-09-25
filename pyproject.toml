@@ -34,6 +34,7 @@ dependencies = [
     "opentelemetry-instrumentation-asyncpg>=0.49b0",
     "opentelemetry-instrumentation-redis>=0.49b0",
     "opentelemetry-instrumentation-httpx>=0.49b0",
+    "structlog>=24.4",
 ]
 
 [dependency-groups]
@@ -107,6 +108,7 @@ ignore = [
 "packages/pipeline/*" = ["S608"]
 # Script vận hành: việc của nó là gọi docker/alembic/lệnh ops cố định qua tiến trình con.
 "infra/bootstrap.py" = ["S603", "S607"]
+"infra/store_backup.py" = ["S603", "S607", "S608"]
 # Bộ đối soát ghép SQL ClickHouse từ UUID đã qua `uuid.UUID()` và store_id đã lọc dấu nháy.
 "packages/simulator/audit.py" = ["S608"]
 
@@ -116,7 +118,7 @@ known-first-party = ["shared", "edge", "central", "simulator", "pipeline"]
 # ───────────────────────────── mypy ─────────────────────────────
 [tool.mypy]
 python_version = "3.12"
-files = ["packages", "tests", "infra/bootstrap.py"]
+files = ["packages", "tests", "infra/bootstrap.py", "infra/store_backup.py"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true

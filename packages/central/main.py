@@ -17,6 +17,7 @@ from sqlalchemy import text
 from central.ingest.router import router as ingest_router
 from central.settings import get_otel_settings, get_settings
 from shared.db import make_engine, make_session_factory
+from shared.logs import setup_logging
 from shared.metrics import setup_metrics
 from shared.tracing import instrument_clients, instrument_fastapi, setup_tracing
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    setup_logging("central-api")
     setup_tracing("central-api", settings=get_otel_settings())
     # Trước `instrument_fastapi()` — xem `shared.metrics.setup_metrics`.
     setup_metrics("central-api", settings=get_otel_settings())

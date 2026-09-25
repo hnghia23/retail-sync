@@ -88,6 +88,20 @@ DEAD_LETTER = text(
     """
 )
 
+# Dọn outbox (ràng buộc #9) — theo lô, theo thứ tự `id` (khóa chính): dòng cũ nhất nằm ở đầu
+# chỉ mục nên không cần index riêng trên `sent_at`. Chỉ dòng ĐÃ GỬI: dòng chưa gửi (cửa hàng offline
+# nhiều ngày) và dòng dead-letter không bao giờ bị đụng.
+PRUNE_SENT = text(
+    """
+    DELETE FROM outbox WHERE id IN (
+        SELECT id FROM outbox
+        WHERE sent_at < now() - make_interval(secs => CAST(:retention AS double precision))
+        ORDER BY id
+        LIMIT :batch
+    )
+    """
+)
+
 #: SDK OpenTelemetry mặc định giữ tối đa 128 link mỗi span; cắt trước thay vì để nó âm thầm bỏ.
 _MAX_LINKS = 128
 
@@ -227,6 +241,28 @@ async def _record_failure(
     return False
 
 
+async def prune_sent(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    retention_days: float,
+    batch: int = 1000,
+) -> int:
+    """Xóa sự kiện đã gửi quá `retention_days`, mỗi lô một transaction ngắn. Trả số dòng đã xóa.
+
+    Lô nhỏ, transaction riêng: không giữ khóa lâu trên bảng mà đường bán hàng đang ghi vào.
+    """
+    total = 0
+    while True:
+        async with transaction(session_factory) as session:
+            result = await session.execute(
+                PRUNE_SENT, {"retention": retention_days * 86400, "batch": batch}
+            )
+        deleted = int(getattr(result, "rowcount", 0) or 0)
+        total += deleted
+        if deleted < batch:
+            return total
+
+
 async def run_forever(
     session_factory: async_sessionmaker[AsyncSession],
     client: CentralClient,
@@ -241,7 +277,22 @@ async def run_forever(
     tới khi có người để ý. Nên mọi lỗi — kể cả DB cửa hàng tạm chết — chỉ làm nó lùi lại.
     """
     failures = 0
+    loop = asyncio.get_running_loop()
+    next_prune = loop.time()  # dọn một lượt ngay khi khởi động, rồi theo chu kỳ
     while not stop.is_set():
+        if loop.time() >= next_prune:
+            next_prune = loop.time() + settings.prune_interval_seconds
+            try:
+                pruned = await prune_sent(
+                    session_factory, retention_days=settings.outbox_retention_days
+                )
+                if metrics is not None:
+                    metrics.record_pruned(pruned)
+                if pruned:
+                    log.info("sync: dọn %d sự kiện đã gửi quá hạn giữ", pruned)
+            except Exception:
+                log.exception("sync: dọn outbox lỗi, thử lại chu kỳ sau")
+
         try:
             report = await run_once(session_factory, client, settings=settings)
         except Exception:
@@ -349,5 +400,8 @@ async def _main() -> None:  # pragma: no cover — điểm vào tiến trình
 
 
 if __name__ == "__main__":  # pragma: no cover
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    from edge.settings import get_settings
+    from shared.logs import setup_logging
+
+    setup_logging(f"sync-worker-{get_settings().store_id}")
     asyncio.run(_main())

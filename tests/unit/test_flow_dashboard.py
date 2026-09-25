@@ -28,7 +28,7 @@ INGEST = ROOT / "packages" / "central" / "ingest" / "telemetry.py"
 
 #: Từ khóa/hàm PromQL — không phải tên metric.
 _PROMQL = {
-    "sum", "max", "min", "avg", "count", "by", "without", "rate", "irate", "increase",
+    "sum", "max", "min", "avg", "count", "by", "without", "rate", "irate", "increase", "clamp_min",
     "histogram_quantile", "or", "and", "unless", "vector", "le", "on", "ignoring",
 }  # fmt: skip
 
@@ -81,6 +81,7 @@ def _metric_names(expr: str) -> set[str]:
     # Bỏ chuỗi TRƯỚC (`"edge-api-${store:regex}"` có `}` bên trong), rồi mới tới nhãn và khoảng.
     stripped = re.sub(r'"[^"]*"', " ", expr)
     stripped = re.sub(r"\{[^}]*\}|\[[^\]]*\]", " ", stripped)
+    stripped = re.sub(r"\b\d+(\.\d+)?(e[-+]?\d+)?\b", " ", stripped)  # hằng số (1e-9, 0.95)
     return {w for w in re.findall(r"[a-z_][a-z0-9_]*", stripped) if w not in _PROMQL} - {
         # nhãn trong by (...) — không phải metric
         "job", "store_id", "table", "outcome", "reason", "level", "layer",
@@ -125,3 +126,42 @@ def test_panel_ids_are_unique_and_the_grid_has_no_overlap() -> None:
         }
         assert not box & cells, f"chồng lên nhau: {p['title']}"
         cells |= box
+
+
+ALERTS = (
+    ROOT / "infra" / "observability" / "grafana" / "provisioning" / "alerting" / "retail-sync.yaml"
+)
+
+
+def _alert_rules() -> list[dict[str, object]]:
+    # File là JSON (tập con của YAML) sau các dòng chú thích `#`.
+    body = "\n".join(
+        line for line in ALERTS.read_text(encoding="utf-8").splitlines() if not line.startswith("#")
+    )
+    rules: list[dict[str, object]] = json.loads(body)["groups"][0]["rules"]
+    return rules
+
+
+def test_every_alert_uses_a_metric_that_some_process_emits() -> None:
+    """Cảnh báo trên metric không ai phát thì không bao giờ kêu — tệ hơn panel trống, vì không ai
+    nhìn cảnh báo cho tới lúc nó cần kêu."""
+    emitted = _emitted()
+    for rule in _alert_rules():
+        data = rule["data"]
+        assert isinstance(data, list)
+        expr = data[0]["model"]["expr"]
+        assert not _metric_names(expr) - emitted, (rule["title"], _metric_names(expr) - emitted)
+
+
+def test_alerts_cover_the_severe_signals_of_docs_08() -> None:
+    names = {n for r in _alert_rules() for n in _metric_names(r["data"][0]["model"]["expr"])}  # type: ignore[index]
+    for must in (
+        "reconcile_drift_count",
+        "point_ledger_partition_months_ahead",
+        "outbox_oldest_unsent_age_seconds",
+        "dead_letter_events",
+        "store_sync_lag_seconds",
+    ):
+        assert must in names, must
+    uids = [r["uid"] for r in _alert_rules()]
+    assert len(uids) == len(set(uids))

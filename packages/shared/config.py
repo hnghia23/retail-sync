@@ -83,6 +83,11 @@ class SyncSettings(_EnvSettings):
     # Trần của MỘT lần gửi lô. Worker giữ khóa hàng (`FOR UPDATE`) trên lô trong lúc chờ,
     # nên đây cũng là thời gian tối đa các dòng đó bị khóa.
     request_timeout_seconds: float = 10.0
+    # Dọn outbox (ràng buộc #9): sự kiện ĐÃ GỬI quá N ngày bị xóa, theo lô, mỗi `prune_interval`.
+    # Giữ vài ngày thay vì xóa ngay: trung tâm khôi phục từ backup cũ thì outbox là nguồn gửi bù.
+    # Không bao giờ xóa sự kiện chưa gửi hay dead-letter (dead-letter chờ người xử lý).
+    outbox_retention_days: float = 7.0
+    prune_interval_seconds: float = 3600.0
 
 
 class OtelSettings(_EnvSettings):
