@@ -30,6 +30,11 @@ rồi hủy máy.
 | `restore` | **MỚI — khôi phục thật** `store_backup.py restore` (§3) | ~15 phút |
 | `chaos` (không nằm trong `all`) | CH-1…CH-7 trên máy sạch (đã đạt trên máy dev) | ~1,5 giờ |
 
+**Test bị BỎ QUA làm job ĐỎ.** Test opt-in tự skip khi thiếu cờ, và diễn tập cảnh báo tự skip khi
+Grafana chưa trả lời. pytest coi skip là xanh, nên một nhóm có thể "đạt" trong vài giây mà không chứng
+minh gì. Vì vậy job đọc `junit.xml` và đỏ nếu có test bị skip, còn `bootstrap.py --observability` giờ
+chờ Grafana lên rồi mới xong.
+
 Nguyên tắc giữ nguyên: **không hạ ngưỡng, không sửa rule** để nó kêu. Các ngưỡng tính bằng giờ nên các
 diễn tập đó dài, và mỗi cái chiếm một máy.
 

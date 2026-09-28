@@ -126,9 +126,20 @@ jobs:
           select=()
           if [ -n "$k" ]; then select=(-k "$k"); fi
           set +e
-          uv run pytest "${{ matrix.path }}" -v -rA "${select[@]}"
+          uv run pytest "${{ matrix.path }}" -v -rA "${select[@]}" --junitxml=runs/proof/junit.xml
           code=$?
+          set -e
           if [ $code -eq 5 ]; then echo "::notice::không test nào khớp -k '$k' trong nhóm này"; exit 0; fi
+          # Ở đây SKIP là ĐỎ: test opt-in tự bỏ qua khi thiếu cờ / Grafana chưa lên, và pytest coi
+          # bỏ qua là xanh — cả nhóm "đạt" trong vài giây mà không chứng minh gì.
+          python3 - <<'EOF'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse("runs/proof/junit.xml").getroot()
+          skipped = [c.get("name") for c in root.iter("testcase") if c.find("skipped") is not None]
+          if skipped:
+              print(f"::error::{len(skipped)} test bị BỎ QUA (không chạy): {', '.join(skipped)}")
+              sys.exit(1)
+          EOF
           exit $code
 
       - name: tổng kết cảnh báo + nơi nhận

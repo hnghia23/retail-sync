@@ -255,6 +255,10 @@ class Bootstrap:
         self.compose("up", "-d", "--build")
         for s in self.stores:
             wait_http(f"http://localhost:{s.api_port}/health", what=f"Edge API {s.store_id}")
+        if "observability" in self.profiles:
+            # Diễn tập cảnh báo tự bỏ qua khi Grafana chưa trả lời — chạy ngay sau bootstrap mà
+            # không chờ thì cả bộ "xanh" vì bị skip.
+            wait_http("http://localhost:3001/api/health", what="Grafana (otel-lgtm)")
         self.wait_dag()
         print(
             f"\n✅ stack '{self.project}' sẵn sàng: {len(self.stores)} cửa hàng, trung tâm, lake,"
