@@ -139,6 +139,7 @@ Cả năm DI là các ô của **bảng đối soát xuyên tầng** ([17 §5](1
 | `simulator/` | Mọi commit | ✅ Có |
 | `scenarios/test_at.py`, `test_data_integrity.py` | Mọi PR | ✅ Có (từ cổng A). **Job CI `scenarios`** (2026-09-25): `infra/bootstrap.py` dựng compose từ con số 0 trên dữ liệu tổng hợp `tests/fixtures/crawl_data/`, rồi `pytest tests/scenarios` + `pipeline health` |
 | `scenarios/test_chaos.py`, `test_load.py`, `test_soak.py` | Trước khi coi cổng B đạt, và theo lịch hằng tuần sau đó | ⚠️ Không chặn PR nhỏ, nhưng bắt buộc cho cổng B |
+| `scenarios/test_alert_drills.py`, `test_load.py`, `test_restore.py`, `test_chaos.py` trên máy sạch | Bấm tay: **workflow `proof`** (2026-09-28, `.github/workflows/proof.yml`) — mỗi nhóm một runner 4 vCPU/16 GB chạy song song, ≤ 6 giờ, kết quả là artifact `proof-<nhóm>` | ⚠️ Bằng chứng cổng B, không chặn PR. Số đo tải thuộc về runner, ghi kèm `machine.txt`. Không chạy được ở đây: test ngâm 72h, LD-3, seam 50 triệu dòng (quá 6 giờ / quá đĩa) |
 
 > **Tiến độ AT (2026-09-23):** AT-01, AT-02, AT-03 và phần trung tâm của AT-04 đã có test ở
 > mức tích hợp (`tests/integration/test_sync_pipeline.py`) — Postgres thật + Central API thật
@@ -156,6 +157,8 @@ riêng: `uv run python infra/bootstrap.py --project retail-sync-ci --env-file ru
 stack dev — dừng stack dev trước).
 
 ---
+*Changelog: 2026-09-28 — §6: workflow `proof` (diễn tập cảnh báo, tải, khôi phục, hỗn loạn trên runner dùng một lần).*
+
 *Changelog: 2026-09-25 (lần 2) — §6: job CI `scenarios` + `infra/bootstrap.py` + biến chọn stack.*
 
 *Changelog: 2026-09-25 — §1 theo file thật (`test_dbt_marts.py`, `test_simulator_virtual.py` ×2,

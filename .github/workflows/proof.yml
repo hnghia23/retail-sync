@@ -1,0 +1,162 @@
+name: proof (giai đoạn B)
+
+# Bằng chứng giai đoạn B chạy trên máy CI dùng một lần thay cho máy dev (docs/progress/2026-09-28-giai-doan-b-proof-ci.md):
+# diễn tập cảnh báo, test tải LD-1/2/4 + overhead OTel, khôi phục backup thật, hỗn loạn CH-1…7. Mỗi
+# nhóm một máy riêng (4 vCPU / 16 GB, miễn phí cho repo public, tối đa 6 giờ mỗi job) và CHẠY SONG
+# SONG — gây sự cố thật mà không có gì khác trên máy để phá, như job `scenarios` của ci.yml.
+#
+# Chỉ chạy bằng tay (Actions → proof → Run workflow): mỗi lượt đủ bộ là ~6 máy × tới 4 giờ.
+# Kết quả là ARTIFACT `proof-<nhóm>`: báo cáo JSON (runs/alerts|load|chaos/<phiên>/), nhật ký cảnh
+# báo + bảng tổng kết, thông tin máy, log compose khi đỏ. Số đo tải là của MÁY NÀY, không phải laptop.
+#
+# Không làm ở đây (cần > 6 giờ hoặc > 14 GB đĩa): test ngâm 72h, LD-3 (T2 24 tháng), seam 50 triệu
+# dòng ledger.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Nhóm cần chạy (all = mọi thứ trừ chaos)"
+        type: choice
+        default: all
+        options: [all, drills, drills-long, load, restore, chaos]
+      k:
+        description: "Lọc thêm pytest -k (tùy chọn, ví dụ: horizon)"
+        type: string
+        default: ""
+
+concurrency:
+  group: proof-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UV_FROZEN: "1"
+  TESTCONTAINERS_RYUK_DISABLED: "true"
+  PYTHONUTF8: "1"
+  COMPOSE: >-
+    docker compose -f infra/compose.yaml --profile edge --profile edge-multi
+    --profile central --profile data --profile observability
+
+jobs:
+  plan:
+    name: chọn nhóm
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          SUITE: ${{ inputs.suite }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os
+          LONG = ["store_offline_70min", "transform_stalls", "pipeline_and_maintenance_stop"]
+          drills = "tests/scenarios/test_alert_drills.py"
+          groups = {
+              # Các diễn tập ngắn (≤ 30 phút mỗi cái) chung một máy; mỗi diễn tập DÀI một máy.
+              "drills": [{"name": "drills", "flag": "RETAIL_SYNC_ALERT_DRILLS", "path": drills,
+                          "k": " and ".join(f"not {n}" for n in LONG), "crawl": "fixture"}],
+              "drills-long": [{"name": f"drill-{n}", "flag": "RETAIL_SYNC_ALERT_DRILLS",
+                               "path": drills, "k": n, "crawl": "fixture"} for n in LONG],
+              # LD-2/LD-4 cấp khóa cho 200 cửa hàng CÓ trong master → bộ tổng hợp lớn hơn.
+              "load": [{"name": "load", "flag": "RETAIL_SYNC_LOAD",
+                        "path": "tests/scenarios/test_load.py", "k": "not ld3", "crawl": "synth"}],
+              "restore": [{"name": "restore", "flag": "RETAIL_SYNC_CHAOS",
+                           "path": "tests/scenarios/test_restore.py", "k": "", "crawl": "fixture"}],
+              "chaos": [{"name": "chaos", "flag": "RETAIL_SYNC_CHAOS",
+                         "path": "tests/scenarios/test_chaos.py", "k": "", "crawl": "fixture"}],
+          }
+          suite = os.environ["SUITE"]
+          chosen = (["drills", "drills-long", "load", "restore"] if suite == "all" else [suite])
+          print("matrix=" + json.dumps({"include": [g for s in chosen for g in groups[s]]}))
+          EOF
+
+  proof:
+    name: ${{ matrix.name }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv sync --all-extras --dev
+
+      # Runner có sẵn ~14 GB trống; bỏ bộ công cụ không dùng tới để image + dữ liệu thoải mái.
+      - name: dọn đĩa runner
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: thông tin máy (số đo tải thuộc về máy này)
+        run: |
+          mkdir -p runs/proof
+          { echo "nproc: $(nproc)"; free -m; df -h /; docker version --format '{{.Server.Version}}';
+            echo "commit: $GITHUB_SHA"; } | tee runs/proof/machine.txt
+
+      - name: dữ liệu master
+        run: |
+          if [ "${{ matrix.crawl }}" = synth ]; then
+            uv run python infra/loadtest/synth_master.py --out runs/synth-master --stores 260
+            echo "RETAIL_SYNC_CRAWL_DATA=runs/synth-master" >> "$GITHUB_ENV"
+          else
+            echo "RETAIL_SYNC_CRAWL_DATA=tests/fixtures/crawl_data" >> "$GITHUB_ENV"
+          fi
+
+      - name: dựng stack (infra/bootstrap.py --observability)
+        run: uv run python infra/bootstrap.py --observability --crawl-data "$RETAIL_SYNC_CRAWL_DATA"
+
+      - name: nhật ký cảnh báo (nền)
+        run: |
+          mkdir -p runs/alerts
+          nohup uv run python infra/alert_watch.py --out runs/alerts/timeline.jsonl \
+            > runs/alerts/watch.log 2>&1 &
+
+      - name: ${{ matrix.path }}
+        env:
+          RETAIL_SYNC_SCENARIOS: "1"
+          FLAG: ${{ matrix.flag }}
+          GROUP_K: ${{ matrix.k }}
+          USER_K: ${{ inputs.k }}
+        run: |
+          export "$FLAG=1"
+          k="$GROUP_K"
+          if [ -n "$USER_K" ]; then k="${k:+($k) and }($USER_K)"; fi
+          select=()
+          if [ -n "$k" ]; then select=(-k "$k"); fi
+          set +e
+          uv run pytest "${{ matrix.path }}" -v -rA "${select[@]}"
+          code=$?
+          if [ $code -eq 5 ]; then echo "::notice::không test nào khớp -k '$k' trong nhóm này"; exit 0; fi
+          exit $code
+
+      - name: tổng kết cảnh báo + nơi nhận
+        if: always()
+        run: |
+          uv run python infra/alert_watch.py --report runs/alerts/timeline.jsonl \
+            | tee runs/alerts/report.txt || true
+          curl -fsS http://localhost:8089/alerts > runs/alerts/sink.jsonl || true
+          docker stats --no-stream > runs/proof/docker-stats.txt || true
+
+      - name: log compose khi đỏ
+        if: failure()
+        run: $COMPOSE logs --no-color --tail 300 > runs/proof/compose.log 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: proof-${{ matrix.name }}
+          # Khóa cửa hàng (runs/*.env, runs/load/ld2-keys/) KHÔNG vào artifact dù máy đã hủy.
+          path: |
+            runs/proof/
+            runs/alerts/
+            runs/load/*/*.json
+            runs/chaos/
+            !runs/**/*.env
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: dọn
+        if: always()
+        run: $COMPOSE down -v --remove-orphans

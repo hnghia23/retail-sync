@@ -5,12 +5,13 @@ mở, xóa partition tương lai, làm hỏng một số dư... — rồi chờ 
 `alert-sink` nhận thông báo, rồi khôi phục. Không hạ ngưỡng, không sửa rule để nó kêu.
 
 Rule không có diễn tập ở đây được kích hoạt ở chỗ khác: `rs-sync-failure-rate`, `rs-circuit-open`
-(CH-1), `rs-store-disk` (CH-4), `rs-central-pg-conn` (LD-4), `rs-loaded-until`, `rs-transform`,
-`rs-maintenance` (trong đợt đo khối lượng dài, khi Airflow/bảo trì dừng nhiều giờ). Tổng kết:
+(CH-1), `rs-store-disk` (CH-4), `rs-central-pg-conn` (LD-4). Tổng kết:
 `uv run python infra/alert_watch.py --report runs/alerts/timeline.jsonl`.
 
 OPT-IN (`RETAIL_SYNC_SCENARIOS=1` + `RETAIL_SYNC_ALERT_DRILLS=1`, `make test-alert-drills`).
-Cần `--profile observability`. `test_drill_store_offline_70min` dài hơn một giờ — chạy riêng.
+Cần `--profile observability`. Ba diễn tập DÀI chạy riêng (job `proof` trên GitHub Actions chạy
+mỗi cái trên một máy): `store_offline_70min` (~1,5 giờ), `transform_stalls` (≤ 2,5 giờ),
+`pipeline_and_maintenance_stop` (~3,2 giờ) — ngưỡng tính bằng giờ, và KHÔNG hạ ngưỡng để thử.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -31,11 +33,15 @@ from simulator.manifest import Manifest, SaleRecord
 from simulator.telemetry import AuditPublisher
 from tests.scenarios.conftest import ROOT, VIRTUAL_KEYS, Stack
 from tests.scenarios.harness import (
+    airflow,
     container_of,
     docker,
     edge_dsn,
     observability_up,
+    pipeline_env,
+    prom,
     report,
+    run_dag,
     run_edge_plans,
     sales_plan,
     wait_alert,
@@ -364,3 +370,73 @@ async def test_drill_store_offline_70min(stack: Stack) -> None:
     })  # fmt: skip
     _assert_all(results)
     assert settled.status == CONVERGED, settled.findings[:5]
+
+
+# ═══════════════ Đường ống đứng nhiều giờ: DAG tạm dừng, bảo trì chết ═══════════════
+
+
+async def test_drill_transform_stalls(stack: Stack) -> None:
+    """rs-transform: S4/S5 vẫn chạy (`pipeline run` từ ngoài, như `make pipeline-run`) nhưng DAG,
+    nơi DUY NHẤT chạy dbt, tạm dừng → đơn đã nạp mà mart chưa có già dần; > 70 phút thì kêu.
+
+    Cửa sổ trích đóng theo giờ, nên đơn chỉ thành "đã nạp" sau mốc giờ kế tiếp: vòng lặp chạy
+    `pipeline run` mỗi 5 phút tới khi bộ giám sát thấy đơn chờ dbt, rồi mới chờ cảnh báo."""
+    assert await asyncio.to_thread(run_dag) == "success"  # mốc: mart bắt kịp bronze
+    await asyncio.to_thread(airflow, "dags", "pause", "retail_pipeline")
+    loads = 0
+    try:
+        manifest = await run_edge_plans(
+            stack, "drill-transform", {"store-001": sales_plan(duration=30, sales=5, seed=94)}
+        )
+        pending = 0.0
+        deadline = time.monotonic() + 80 * 60
+        while time.monotonic() < deadline:
+            await asyncio.to_thread(_ops, "-m", "pipeline", "run", env=pipeline_env(stack))
+            loads += 1
+            await asyncio.sleep(90)  # ba chu kỳ của flow-monitor
+            if (pending := prom("max(pipeline_transform_pending_sales)") or 0.0) > 0:
+                break
+            await asyncio.sleep(210)
+        assert pending > 0, "80 phút mà bronze chưa có đơn nào chờ dbt"
+        result = await _expect("rs-transform", within=80 * 60)
+    finally:
+        await asyncio.to_thread(airflow, "dags", "unpause", "retail_pipeline")
+    assert await asyncio.to_thread(run_dag) == "success"
+    resolved = await wait_alert("rs-transform", state="inactive", within=600)
+    report("alerts", "drill-transform", {
+        "result": result, "host_pipeline_runs": loads, "pending_sales_seen": pending,
+        "manifest": manifest.run_id, "resolved_after_seconds": resolved,
+    })  # fmt: skip
+    _assert_all([result])
+    assert resolved is not None
+
+
+async def test_drill_pipeline_and_maintenance_stop(stack: Stack) -> None:
+    """rs-loaded-until + rs-maintenance: DAG tạm dừng VÀ `central-maintenance` chết — không ai chạy
+    S4/S5, không ai đối soát INV-4 hay tạo partition. Mép "đã nạp tới" và lượt đối soát cuối già
+    quá 3 giờ; cả hai rule `for: 0s` nên kêu ngay khi vượt (~3 giờ 5 phút tính từ lúc dừng)."""
+    maintenance = container_of("central-maintenance")
+    assert await asyncio.to_thread(run_dag) == "success"  # đủ 7 bảng có mép "đã nạp tới"
+    assert _psql(
+        stack,
+        "SELECT count(*) FROM reconciliation_watermark WHERE job_name = 'point_balance_vs_ledger'",
+    ).strip() == "1", "central-maintenance chưa chạy lượt nào — không có gì để già đi"  # fmt: skip
+    await asyncio.to_thread(airflow, "dags", "pause", "retail_pipeline")
+    docker("stop", maintenance)
+    deadline = time.monotonic() + 3 * 3600 + 20 * 60
+    try:
+        results = [
+            await _expect(uid, within=max(60.0, deadline - time.monotonic()))
+            for uid in ("rs-maintenance", "rs-loaded-until")
+        ]
+    finally:
+        docker("start", maintenance)
+        await asyncio.to_thread(airflow, "dags", "unpause", "retail_pipeline")
+    assert await asyncio.to_thread(run_dag) == "success"
+    resolved = {
+        uid: await wait_alert(uid, state="inactive", within=600)
+        for uid in ("rs-maintenance", "rs-loaded-until")
+    }
+    report("alerts", "drill-pipeline-stop", {"results": results, "resolved": resolved})
+    _assert_all(results)
+    assert all(v is not None for v in resolved.values()), resolved

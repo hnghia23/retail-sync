@@ -7,48 +7,15 @@ DI-* là các ô của bảng đối soát xuyên tầng (docs/17 §5): một l�
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-import time
 
 import asyncpg
 import httpx
 import pytest
 
-from tests.scenarios.conftest import ROOT, Stack, container
-
-SCHEDULER = container("airflow-scheduler")
-
-
-def _airflow(*args: str) -> str:
-    result = subprocess.run(  # noqa: S603
-        ["docker", "exec", SCHEDULER, "airflow", *args],  # noqa: S607
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=120,
-        check=True,
-        env=os.environ | {"MSYS_NO_PATHCONV": "1"},
-    )
-    return result.stdout
-
-
-def _run_dag(timeout: float = 900) -> str:
-    """Kích một lượt `retail_pipeline` và chờ nó xong. Trả trạng thái cuối."""
-    before = {
-        r["run_id"]
-        for r in json.loads(_airflow("dags", "list-runs", "retail_pipeline", "-o", "json"))
-    }
-    _airflow("dags", "trigger", "retail_pipeline")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        runs = json.loads(_airflow("dags", "list-runs", "retail_pipeline", "-o", "json"))
-        mine = [r for r in runs if r["run_id"] not in before and r["run_id"].startswith("manual__")]
-        if mine and mine[0]["state"] in ("success", "failed"):
-            return str(mine[0]["state"])
-        time.sleep(10)
-    raise TimeoutError("DAG retail_pipeline không xong trong thời hạn")
+from tests.scenarios.conftest import ROOT, Stack
+from tests.scenarios.harness import run_dag as _run_dag
 
 
 def _ch(stack: Stack, sql: str) -> list[list[str]]:

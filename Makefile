@@ -49,6 +49,10 @@ test-alert-drills:  ## Dien tap canh bao (tao dieu kien that cho tung rule, cho 
 test-load:  ## LD-1, LD-2, LD-4 + overhead OTel tren compose (hang tram nghin su kien vao stack dev)
 	RETAIL_SYNC_SCENARIOS=1 RETAIL_SYNC_LOAD=1 uv run pytest tests/scenarios/test_load.py -v $(ARGS)
 
+.PHONY: test-restore
+test-restore:  ## Khoi phuc THAT DB store-001 tu backup (RPO, gui lai outbox, ban tiep) - thay DB cua hang!
+	RETAIL_SYNC_SCENARIOS=1 RETAIL_SYNC_CHAOS=1 uv run pytest tests/scenarios/test_restore.py -v $(ARGS)
+
 .PHONY: alert-watch
 alert-watch:  ## Ghi moi lan doi trang thai cua canh bao -> runs/alerts/timeline.jsonl (chay nen). REPORT=1 tong ket
 	uv run python infra/alert_watch.py $(if $(REPORT),--report runs/alerts/timeline.jsonl,)

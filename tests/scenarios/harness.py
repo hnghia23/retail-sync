@@ -66,6 +66,51 @@ def docker(*args: str, check: bool = True, timeout: float = 180) -> str:
     return r.stdout
 
 
+def airflow(*args: str) -> str:
+    """Lệnh `airflow` trong container scheduler (CLI có sẵn ở đó, không cần API/JWT)."""
+    result = subprocess.run(  # noqa: S603
+        ["docker", "exec", container("airflow-scheduler"), "airflow", *args],  # noqa: S607
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+        check=True,
+        env=os.environ | {"MSYS_NO_PATHCONV": "1"},
+    )
+    return result.stdout
+
+
+def run_dag(timeout: float = 900) -> str:
+    """Kích một lượt `retail_pipeline` và chờ nó xong. Trả trạng thái cuối. DAG phải đang
+    KHÔNG tạm dừng: lượt kích tay của DAG tạm dừng chỉ nằm chờ."""
+    listed = airflow("dags", "list-runs", "retail_pipeline", "-o", "json")
+    before = {r["run_id"] for r in json.loads(listed)}
+    airflow("dags", "trigger", "retail_pipeline")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        runs = json.loads(airflow("dags", "list-runs", "retail_pipeline", "-o", "json"))
+        mine = [r for r in runs if r["run_id"] not in before and r["run_id"].startswith("manual__")]
+        if mine and mine[0]["state"] in ("success", "failed"):
+            return str(mine[0]["state"])
+        time.sleep(10)
+    raise TimeoutError("DAG retail_pipeline không xong trong thời hạn")
+
+
+def pipeline_env(stack: Stack) -> dict[str, str]:
+    """Biến cho `python -m pipeline …` chạy trên máy host (như `infra/bootstrap.py`)."""
+    e = stack.env
+    return {
+        "PIPELINE_PG_DSN": stack.central_dsn,
+        "LAKE_ENDPOINT": "localhost:9000",
+        "LAKE_ACCESS_KEY": e.get("MINIO_ROOT_USER", "minioadmin"),
+        "LAKE_SECRET_KEY": e["MINIO_ROOT_PASSWORD"],
+        "LAKE_URL_FOR_CLICKHOUSE": "http://minio:9000",
+        "CLICKHOUSE_URL": "http://localhost:8123",
+        "CLICKHOUSE_USER": e.get("CLICKHOUSE_USER", "dw"),
+        "CLICKHOUSE_PASSWORD": e["CLICKHOUSE_PASSWORD"],
+    }
+
+
 def edge_dsn(stack: Stack, store_id: str) -> str:
     _, port, db = EDGE[store_id]
     e = stack.env

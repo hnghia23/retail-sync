@@ -19,8 +19,10 @@ partition + INV-4, dọn outbox, log JSON, 15 cảnh báo, backup cửa hàng
 ([nhật ký](docs/progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ **CH-1…CH-7 đều đạt**, 21 cảnh báo (16
 đã kích hoạt thử), partition "chỉnh đồng hồ", dữ liệu T2 đã sinh
 ([nhật ký](docs/progress/2026-09-25-giai-doan-b-chung-minh.md) — **đọc §8 "điểm dừng"**). Chủ dự án
-muốn **xong B rồi mới chạy test ngâm 72h**. Còn: LD-1/2/4 + overhead OTel, LD-3, seam 50 triệu dòng
-ledger, 5 cảnh báo chưa kích hoạt, `restore` thật, `git clone` → README.
+muốn **xong B rồi mới chạy test ngâm 72h**, và **không muốn máy cá nhân chạy nhiều giờ** → diễn tập,
+LD-1/2/4, `restore` thật chạy bằng **workflow `proof`** trên GitHub Actions (bấm tay, mỗi nhóm một runner,
+≤ 6 giờ — [nhật ký](docs/progress/2026-09-28-giai-doan-b-proof-ci.md)). Còn cần máy chạy liên tục: LD-3,
+seam 50 triệu dòng ledger, test ngâm.
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 

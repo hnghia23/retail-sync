@@ -133,6 +133,10 @@ sinh **tới từng đồng** (54.618.630.004 đ, 101.754 đơn, 336.936 dòng, 
 
 ## 8. Điểm dừng và việc còn lại (theo thứ tự)
 
+> **2026-09-28:** các mục 1, 2, phần kích hoạt cảnh báo của mục 3, và `restore` ở mục 5 đã chuyển sang
+> workflow `proof` trên GitHub Actions — xem [2026-09-28-giai-doan-b-proof-ci.md](2026-09-28-giai-doan-b-proof-ci.md).
+> LD-3, seam ledger và test ngâm vẫn cần máy chạy liên tục.
+
 Trạng thái lúc dừng: stack dev chạy đủ, 4 API `200`, mọi thứ bị gây sự cố đã khôi phục (mạng trung tâm,
 worker store-003, MinIO, CPU DB store-002); không còn test nào chạy nền. Đĩa C: còn 52 GB.
 
