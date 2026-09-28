@@ -181,6 +181,9 @@ class Bootstrap:
         dbs = ["central-db", *(f"edge-db-{s.store_id}" for s in self.stores), "minio", "clickhouse"]
         self.compose("up", "-d", "--wait", *dbs)
         wait_http("http://localhost:8123/ping", what="ClickHouse")
+        # Image MinIO distroless không có healthcheck (compose.yaml): `--wait` chỉ đợi được tới lúc
+        # container CHẠY, chưa chắc đã nhận request — `pipeline init` ngay sau đó tạo bucket.
+        wait_http("http://localhost:9000/minio/health/live", what="MinIO")
 
         self.step("migration Alembic")
         alembic = ["-m", "alembic", "-c"]

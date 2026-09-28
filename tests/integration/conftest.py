@@ -87,8 +87,9 @@ def _wait_until(condition: Any, *, timeout: float, what: str) -> Any:
         time.sleep(0.25)
 
 
-# Cùng image với infra/compose.yaml — Docker Hub `minio/minio` đã không còn (2026-09-24).
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"
+# Cùng image với infra/compose.yaml (lý do chọn và cách cập nhật digest: docs/adr/005 §Rủi ro nguồn
+# cung — Docker Hub `minio/minio` đã xóa, `quay.io/minio/minio` bắt đăng nhập từ 2026-09).
+MINIO_IMAGE = "cgr.dev/chainguard/minio@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b"  # noqa: E501 — digest không ngắt dòng được
 MINIO_USER = "minio-test"
 MINIO_PASSWORD = "minio-test-secret"
 
@@ -156,6 +157,8 @@ def minio(docker_network: Any) -> Iterator[Minio]:
     core = pytest.importorskip("testcontainers.core.container")
     container = (
         core.DockerContainer(MINIO_IMAGE)
+        # Image chạy user 65532 và không có sẵn `/data`: chạy root như compose để MinIO tạo được nó.
+        .with_kwargs(user="0:0")
         .with_env("MINIO_ROOT_USER", MINIO_USER)
         .with_env("MINIO_ROOT_PASSWORD", MINIO_PASSWORD)
         .with_command("server /data")

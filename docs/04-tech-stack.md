@@ -18,7 +18,7 @@ Mỗi lựa chọn ở đây phải trả lời được ba câu: **Vì sao ch�
 | DB trung tâm | **PostgreSQL 18** | Xem [ADR-001](adr/001-postgres-everywhere.md) | PgBouncer → read replica → Citus/CockroachDB |
 | Truy cập DB | **SQLAlchemy 2.0 (async) + Alembic** | ORM chín muồi, migration có version | — |
 | Đồng bộ | **Transactional Outbox + HTTP** | Xem [ADR-003](adr/003-outbox-not-kafka.md) | Debezium CDC → Redpanda, code không đổi |
-| Lake | **MinIO + Parquet** (phân vùng Hive) — image `quay.io/minio/minio` ghim bản (Docker Hub `minio/minio` đã không còn, 2026-09-24) | S3 API, chạy local, bất biến, nén tốt | Đổi endpoint sang S3/GCS; nâng lên Iceberg khi cần schema evolution |
+| Lake | **MinIO + Parquet** (phân vùng Hive) — image `cgr.dev/chainguard/minio` ghim digest (Docker Hub `minio/minio` đã xóa 2026-09-24, `quay.io/minio/minio` bắt đăng nhập 2026-09-28 — ADR-005 §Rủi ro nguồn cung) | S3 API, chạy local, bất biến, nén tốt | Đổi endpoint sang S3/GCS; nâng lên Iceberg khi cần schema evolution |
 | Warehouse | **ClickHouse** | Xem [ADR-005](adr/005-clickhouse-warehouse.md) | Thêm shard hoặc ClickHouse Cloud |
 | Biến đổi | **dbt-core + dbt-clickhouse** (1.12.5 + 1.10.3, ghim ở `data_platform/requirements-dbt.txt`, venv riêng) | Test, lineage, docs, incremental — miễn phí. Đòn bẩy cao nhất trong cả stack. Đã kiểm chứng: dbt Core v2.0 + **Fusion engine (viết lại bằng Rust) vẫn open source Apache 2.0** sau khi dbt Labs sáp nhập Fivetran (01/06/2026) | SQLMesh nếu incremental phức tạp lên; dbt Cloud nếu cần managed |
 | Điều phối | **Airflow 3 + LocalExecutor** (3.3.2: api-server, scheduler, dag-processor; không triggerer) | Chủ dự án đã có kinh nghiệm. Xem [ADR-007](adr/007-airflow-over-dagster.md) | CeleryExecutor → k8s executor → Astronomer/MWAA |

@@ -354,10 +354,16 @@ services:
   # ═══════════════════════ DATA PLATFORM (profile: data) ═══════════════════════
 
   minio:
-    # Docker Hub `minio/minio` KHÔNG còn tồn tại (pull trả "repository does not exist",
-    # 2026-09-24) — MinIO chỉ còn phát hành image qua quay.io. Ghim bản cụ thể: `latest` của một
-    # nguồn phát hành vừa đổi chính sách là thứ không nên tin (docs/adr/005 §Rủi ro nguồn cung).
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # Nguồn image (docs/adr/005 §Rủi ro nguồn cung): Docker Hub `minio/minio` đã bị xóa (2026-09-24),
+    # rồi `quay.io/minio/minio` bắt đăng nhập (CI GitHub Actions 2026-09-28: "unauthorized") — máy
+    # nào đã có sẵn image trong cache thì vẫn chạy, máy sạch thì không. Dùng bản build MinIO của
+    # Chainguard: bản miễn phí CHỈ có tag `latest`, nên GHIM BẰNG DIGEST (cách cập nhật: ADR-005).
+    # - Distroless: không shell, không `mc` → không có healthcheck bên trong container. Ai cần chờ
+    #   MinIO thì hỏi `GET /minio/health/live` từ ngoài (infra/bootstrap.py, fixture test).
+    # - Image chạy user 65532; volume `minio_data` (tạo từ image cũ) và volume mới đều thuộc root →
+    #   chạy root để ghi được `/data`.
+    image: cgr.dev/chainguard/minio@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b
+    user: "0:0"
     profiles: ["data"]
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -367,10 +373,6 @@ services:
     ports: ["9000:9000", "9001:9001"]
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      retries: 10
 
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
@@ -443,7 +445,9 @@ services:
   # ═══════════════════════ BI (profile: bi) ═══════════════════════
 
   metabase:
-    image: metabase/metabase:latest
+    # Ghim bản phát hành ổn định (không `latest`: tests/unit/test_images_pinned.py). Metabase là
+    # "Could" (docs/08 §7), chưa có gì dựa vào nó — đổi bản thoải mái, nhưng đổi có chủ đích.
+    image: metabase/metabase:v0.63.18.2
     profiles: ["bi"]
     restart: unless-stopped
     ports: ["3000:3000"]

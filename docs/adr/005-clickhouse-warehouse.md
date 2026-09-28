@@ -188,8 +188,30 @@ Không đổi quyết định lake: pipeline chỉ nói giao thức S3 qua `pyar
 S3/GCS thật ở production) là đổi image và endpoint, không đổi code. **Điều kiện xem lại:**
 quay.io cũng ngừng phát hành, hoặc cần bản vá bảo mật mà không còn image.
 
+> ⚠️ **2026-09-28 — điều kiện xem lại đã xảy ra.** `quay.io/minio/minio` bắt đăng nhập (API trả
+> `401`, CI GitHub Actions: *"unauthorized: access to the requested resource is not authorized"*).
+> Máy dev vẫn chạy chỉ nhờ image nằm sẵn trong cache — máy sạch (CI, `git clone` mới) thì không.
+> Đã cân nhắc: SeaweedFS (Apache-2.0, có tag phiên bản, nhưng đổi phần mềm: healthcheck, cấu hình
+> khóa S3, fixture) và bản build MinIO của **Chainguard** (`cgr.dev/chainguard/minio`, vẫn là
+> MinIO). Chủ dự án chọn **Chainguard** — đổi ít nhất, cùng phần mềm đã kiểm ở giai đoạn A.
+>
+> Cái giá, và cách sống với nó:
+> - Bản miễn phí CHỈ có tag `latest` → **ghim bằng digest** (`@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b`, bản build 2026-09-27).
+>   Cập nhật: lấy digest mới của `cgr.dev/chainguard/minio:latest`
+>   (`docker buildx imagetools inspect cgr.dev/chainguard/minio:latest`), đổi ở `infra/compose.yaml`
+>   VÀ `tests/integration/conftest.py` cùng lúc (`tests/unit/test_images_pinned.py` đỏ nếu lệch),
+>   chạy test tích hợp S4/S5 rồi mới commit.
+> - Image distroless (không shell, không `mc`) → không có healthcheck trong container; ai cần chờ thì
+>   hỏi `GET /minio/health/live` từ ngoài (`infra/bootstrap.py`, fixture test). Chạy user 0 vì image
+>   mặc định là user 65532 còn volume thuộc root.
+> - Chainguard cũng là một nguồn có thể đổi chính sách. **Điều kiện xem lại tiếp theo:** digest đã
+>   ghim không kéo được nữa → chuyển SeaweedFS (hoặc Garage) — vẫn chỉ đổi image và endpoint.
+
 ### Tiêu cực
 - Thêm một chặng (lake) so với nạp thẳng
 - ClickHouse có những đặc thù riêng (engine table, `FINAL`, mutation đắt) — cần học
 - Thêm ~1.3 GB RAM (ClickHouse + MinIO)
 - Phải học dbt nếu chưa biết (~1 ngày, hoàn vốn ngay trong tuần đó)
+
+---
+*Changelog: 2026-09-28 — §Rủi ro nguồn cung: quay.io bắt đăng nhập → MinIO bản Chainguard, ghim digest.*

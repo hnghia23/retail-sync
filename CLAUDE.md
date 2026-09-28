@@ -45,7 +45,10 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
   nạp ClickHouse = đường dẫn **+ SHA-256 nội dung**.
 - **Lake bất biến:** file bronze đã ghi thì không bao giờ trích lại. Cửa sổ mới bắt đầu ở mép
   cuối của file cuối cùng, nên chính lake là trạng thái, không có bảng watermark riêng.
-- MinIO: **`quay.io/minio/minio`** (ghim bản). Docker Hub `minio/minio` đã không còn.
+- MinIO: **`cgr.dev/chainguard/minio@sha256:…`** (ghim DIGEST — bản miễn phí chỉ có `latest`).
+  Docker Hub `minio/minio` đã xóa, `quay.io/minio/minio` bắt đăng nhập (2026-09-28, CI đỏ) — máy dev
+  chạy được chỉ nhờ cache. Image distroless: không `mc`/healthcheck, chạy user 0. Đổi digest ở
+  compose VÀ `tests/integration/conftest.py` cùng lúc (ADR-005 §Rủi ro nguồn cung).
 - **Một lượt pipeline mỗi lúc:** `run_once` giữ advisory lock trên PG trung tâm qua CẢ trích
   lẫn nạp (DAG và `make pipeline-run` có thể chồng nhau). Bảng incremental rỗng vẫn ghi một
   file mốc, vì mép "đã nạp tới" đòi đủ 7 bảng.
