@@ -107,10 +107,67 @@ Tăng số worker không phải sửa nhỏ: rate limit theo cửa hàng đang n
   nên không còn partition `point_ledger` → điểm của đơn 31/8 bị từ chối vĩnh viễn → dead-letter. Giờ
   `START` = ngày cuối tháng trước, tính theo hôm nay.
 
-## 5. Trạng thái
+## 5. Trạng thái (2026-10-07)
 
-Đã sửa (commit sau `8f9c559`) nhưng **chưa chạy lại**. Cần push rồi chạy lại `proof` (`all`). Hai test
-tích hợp mới chạy trong job `integration` của CI thường.
+**Code:** commit `051b353` (cục bộ, chờ push) gồm mọi bản sửa ở §4. Đã chạy trên máy: **182/182 test
+tích hợp**, 282 unit test, lint/mypy/import-linter sạch. **Chưa** chạy lại workflow `proof`: các diễn
+tập đã sửa (drift, DB chậm ×2, cửa hàng im lặng, transform) chưa có bằng chứng trên Docker thật.
 
-Sau `proof`, việc còn lại của cổng B: LD-3 (bản dbt cũ và mới), seam 50 triệu dòng ledger, ghi số vào
-docs/02, test ngâm 72h. Các việc này cần một máy chạy liên tục (VPS) hoặc máy dev lúc rảnh.
+**Cổng B** ([06](../06-roadmap.md)):
+
+| Điều kiện | Trạng thái |
+|---|---|
+| CH-1…CH-7 | ✅ (2026-09-25, máy dev) |
+| Cảnh báo đã kích hoạt thử | 🟡 **19/21** — còn `rs-db-pool`, `rs-transform` (diễn tập đã sửa, chờ chạy) |
+| Partition tháng sau tự tồn tại | ✅ |
+| Backup + `restore` thật | ✅ (workflow `proof`) |
+| LD-1 | ✅ p95 chốt đơn 22 ms, bộ giả lập 1% CPU |
+| LD-4 / 200 kết nối | ✅ chỉ `200`/`503` có `Retry-After`, 0 lỗi |
+| **LD-2** | 🔴 p95 > 1 s từ ~164 sự kiện/giây — **chờ quyết định** (§6 bước 3) |
+| **Overhead OTel** | 🔴 +146% p95 với trace 100% — **chờ quyết định** (§6 bước 3) |
+| LD-3, seam 50 triệu dòng ledger | ⏳ cần máy chạy liên tục |
+| DI-1…DI-5 | ⏳ DI-1…3 có trong job `scenarios`; DI-4/5 chưa rà |
+| Test ngâm 72h | ⏳ chạy cuối cùng |
+| Số đo ghi vào docs/02, `git clone` → README | ⏳ |
+
+## 6. Các bước tiếp theo (theo thứ tự)
+
+**Bước 1 — push, chờ CI thường xanh** (~15 phút). Push `main`. Workflow `CI` tự chạy: `quality`,
+`unit`, `integration`, `scenarios`. Nếu đỏ: dán khoảng 80 dòng cuối của bước đỏ (từ `FAILURES` / `short
+test summary info`). Hoặc cài `gh` (`winget install GitHub.cli` → `gh auth login`) để Claude tự đọc log.
+
+**Bước 2 — chạy lại `proof`** (~4 giờ, không tốn máy cá nhân). Actions → **proof (giai đoạn B)** → Run
+workflow → `main`, suite `all`, `-k` để trống. Chờ xong thì tải 6 artifact `proof-*` và giải nén vào
+`runs/proof-ci/<tên-artifact>/` (xóa thư mục lượt cũ trước), rồi báo Claude đọc. Kỳ vọng:
+- `drills`, ba `drill-*`, `restore` xanh → **21/21 cảnh báo** đã kích hoạt thử.
+- `load` vẫn đỏ vì LD-2 — đúng, chờ bước 3. Lượt này có thêm CPU central-api/central-db từng bậc LD-2 và
+  số đo chế độ trace 10%.
+- Chạy lại riêng một test: điền `-k` (ví dụ `slow_store`) và chọn đúng suite.
+- Artifact giữ 30 ngày.
+
+**Bước 3 — chủ dự án quyết hai việc**, dựa trên số của bước 2:
+1. **Tỉ lệ lấy mẫu trace** (ADR-009: overhead > 5% → giảm). Nếu trace 10% đưa overhead về gần 5%, đặt
+   `OTEL_TRACES_SAMPLER=parentbased_traceidratio`, `OTEL_TRACES_SAMPLER_ARG=0.1` trong compose cho edge-api
+   (và central-api), ghi changelog ADR-009.
+2. **LD-2.** Đọc CPU từng bậc:
+   - **central-api ~100% (một nhân)**: nghẽn ở một tiến trình Python. Lựa chọn: giảm trace (thường gỡ
+     được phần lớn), hoặc nhiều worker uvicorn. Nhiều worker kéo theo rate limit theo cửa hàng phải rời
+     bộ nhớ tiến trình (Redis) → cần ADR.
+   - **central-db cao**: tối ưu ingest (gom câu lệnh theo lô), xem `pg_stat_statements`.
+   - **Cả hai đều thấp**: runner bị chia nhân cho ~30 container. Cần đo lại trên máy có trung tâm riêng
+     (VPS) trước khi kết luận.
+   - Quyết định nào cũng ghi số vào docs/02 §6 và changelog docs/16 §4.
+
+**Bước 4 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
+được (> 6 giờ hoặc > 14 GB đĩa):
+- **Seam 50 triệu dòng ledger**: `make seam-ledger WORK="runs/bulk-t2-24m-s42/work runs/bulk-t2-extra-s43/work"`
+  (dữ liệu đã sinh trên máy dev; VPS thì sinh lại bằng `make sim-bulk`).
+- **LD-3**: bản dbt cũ (commit `9d13cb0`) vài tháng đầu để có số "trước", rồi bản hiện tại đủ 24 tháng +
+  truy vấn lớp C: `make ld3`.
+- Ghi số đo vào docs/02, rà DI-4/DI-5, chạy thử `git clone` → README trên máy sạch.
+
+**Bước 5 — test ngâm 72h** (cuối cùng, sau khi mọi thứ trên xanh): `edge` t0 + `virtual` t1 chạy nền
+3 ngày, `audit --watch` + nhật ký cảnh báo. Đạt: không rò bộ nhớ, `outbox` không bloat, p95 không trôi,
+`audit` không lần nào `DIVERGED`. Đây là việc duy nhất BẮT BUỘC cần máy chạy liên tục 3 ngày.
+
+Xong cả 5 bước → đánh dấu cổng B trong docs/06 → giai đoạn C ([ADR-010](../adr/010-data-flow-first.md)).

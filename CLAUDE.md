@@ -21,8 +21,9 @@ partition + INV-4, dọn outbox, log JSON, 15 cảnh báo, backup cửa hàng
 ([nhật ký](docs/progress/2026-09-25-giai-doan-b-chung-minh.md) — **đọc §8 "điểm dừng"**). Chủ dự án
 muốn **xong B rồi mới chạy test ngâm 72h**, và **không muốn máy cá nhân chạy nhiều giờ** → diễn tập,
 LD-1/2/4, `restore` thật chạy bằng **workflow `proof`** trên GitHub Actions (bấm tay, mỗi nhóm một runner,
-≤ 6 giờ — [nhật ký](docs/progress/2026-09-28-giai-doan-b-proof-ci.md)). Còn cần máy chạy liên tục: LD-3,
-seam 50 triệu dòng ledger, test ngâm.
+≤ 6 giờ — [nhật ký](docs/progress/2026-09-28-giai-doan-b-proof-ci.md), **đọc §5 trạng thái + §6 các bước
+tiếp theo**). 2026-10-07: cảnh báo 19/21, `restore` thật ✅, LD-1/LD-4 ✅; **LD-2 và overhead OTel 🔴 chờ chủ dự
+án quyết**. Còn cần máy chạy liên tục: LD-3, seam 50 triệu dòng ledger, test ngâm.
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 

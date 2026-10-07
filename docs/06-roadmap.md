@@ -159,14 +159,14 @@ thử nghiệm ở [08 §6](08-reliability-and-scale.md).
 | 15 | ✅ **Nợ từ A:** job CI dựng compose + seed, chạy `tests/scenarios/` mỗi PR ([16 §6](16-test-plan.md)) | Xong 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-ci.md)): `infra/bootstrap.py` (dựng từ con số 0, chạy lại được) + job `scenarios`; dữ liệu master tổng hợp `tests/fixtures/crawl_data/` vì `crawl_data/` thật không nằm trong git |
 | 15 | ✅ **Test hỗn loạn CH-1…CH-7** trên luồng đang chạy: ngắt mạng, `kill -9` app, `kill -9` Postgres, đầy đĩa, tắt Redis, 10 CH nối lại cùng lúc, gửi lặp | Xong 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-chung-minh.md)): **cả 7 đạt**, mọi kịch bản `CONVERGED`. CH-1 mất trung tâm 30 phút → hội tụ 168 s sau khi nối lại; CH-3 `kill -9` Postgres ×3 → 0 giao dịch đã commit bị mất. ⚠️ CH-6: p95 `POST /events` 9,3 s lúc dồn (máy đang bận) — đo lại ở LD-2 |
 | 16 | ✅ Bộ giả lập bước 6–7: sink `bulk` + test hợp đồng schema bronze, profile `t2`/`t3` | Xong 2026-09-25: prefix lake riêng, nạp bằng bộ nạp thật; dữ liệu T2 24 tháng đã sinh (79,3 Tr đơn, 262,9 Tr dòng hàng) |
-| 16 | **Test tải LD-1…LD-4** bằng bộ giả lập (vòng hở) | 🔴 Must. Thay `k6` — [18 §9](18-simulator.md). ⏳ công cụ xong (`tests/scenarios/test_load.py`, `infra/loadtest/`), chưa chạy |
+| 16 | **Test tải LD-1…LD-4** bằng bộ giả lập (vòng hở) | 🔴 Must. Thay `k6` — [18 §9](18-simulator.md). Chạy trên runner CI (workflow `proof`, 2026-09-28, [progress](progress/2026-09-28-giai-doan-b-proof-ci.md)): ✅ LD-1 (p95 chốt đơn 22 ms), ✅ LD-4 (200 client: chỉ `200`/`503` có `Retry-After`; thẳng vào PG bị chặn ở `max_connections`). 🔴 **LD-2: p95 `POST /events` > 1 s từ ~164 sự kiện/giây**, dưới tải thiết kế ~260/giây — dữ liệu luôn đúng. Chờ quyết định |
 | 17 | **Kiểm chứng scale seam:** 50 triệu dòng `point_ledger` + đo partition pruning; dữ liệu T2 (~256 Tr dòng fact) vào ClickHouse, truy vấn lớp C < 3 s; 200 kết nối đồng thời | 🔴 Must — [08 §4.4](08-reliability-and-scale.md). Ghi số đo thật vào [02](02-scale-capacity.md). ⏳ dữ liệu đã sinh (50,1 Tr dòng ledger), chưa nạp/đo. Khi viết công cụ lộ ra **dbt tốn O(lịch sử) mỗi giờ** — đã sửa sang O(tháng), chưa đo ở T2 |
 | 17 | Backfill 7 ngày quá khứ (FR-C09) | Should |
 | 18 | **Test ngâm 72h** chạy nền (`edge` t0 + `virtual` t1): rò rỉ bộ nhớ, bloat `outbox`, trôi độ trễ, `audit` định kỳ | 🔴 Must — chạy nền trong ngày 18–20 |
-| 18 | **Đo overhead OTel:** chạy LD-1 hai lần, có và không có instrumentation | 🔴 Must — > 5% thì giảm tỉ lệ lấy mẫu ([ADR-009](adr/009-observability-stack.md)). ⏳ công cụ xong (`test_otel_overhead`: bật/tắt/bật/tắt), chưa chạy |
-| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must — 2026-09-25: ✅ **21 rule** (đủ bảng docs/08 §5) + contact point webhook → `alert-sink`, ✅ log JSON + `trace_id`. 🟡 **16/21 đã kích hoạt thử** (Grafana kêu + thông báo tới thật, [progress](progress/2026-09-25-giai-doan-b-chung-minh.md)). ⏳ `rs-db-pool`, `rs-central-pg-conn`, `rs-loaded-until`, `rs-transform`, `rs-maintenance`; chạy lại `rs-horizon` |
+| 18 | **Đo overhead OTel:** chạy LD-1 hai lần, có và không có instrumentation | 🔴 Must — > 5% thì giảm tỉ lệ lấy mẫu ([ADR-009](adr/009-observability-stack.md)). 🔴 Đo trên runner CI: trace 100% làm p95 chốt đơn **11 → 28 ms (+146%)**, vượt xa 5%. Lượt sau đo thêm trace 10% để quyết ([progress](progress/2026-09-28-giai-doan-b-proof-ci.md)) |
+| 19 | Ngưỡng cảnh báo [08 §5](08-reliability-and-scale.md) cấu hình xong **và kích hoạt thử được**; `structlog` JSON | 🔴 Must — 2026-09-25: ✅ **21 rule** (đủ bảng docs/08 §5) + contact point webhook → `alert-sink`, ✅ log JSON + `trace_id`. 🟡 **19/21 đã kích hoạt thử** (Grafana kêu + thông báo tới thật; [2026-09-25](progress/2026-09-25-giai-doan-b-chung-minh.md), [workflow `proof`](progress/2026-09-28-giai-doan-b-proof-ci.md): `rs-central-pg-conn`, `rs-loaded-until`, `rs-maintenance`, chạy lại `rs-horizon`). ⏳ `rs-db-pool`, `rs-transform` — diễn tập đã sửa, chờ chạy lại |
 | 19 | ✅ Partition tháng sau **tự tồn tại**, test bằng cách chỉnh đồng hồ; job dọn `outbox` đã gửi > 7 ngày | 2026-09-25: ✅ lịch `central-maintenance` (trước đó **không có gì gọi** hàm tạo partition — xem [progress](progress/2026-09-25-giai-doan-b-van-hanh.md)), ✅ dọn outbox trong sync worker, ✅ **chỉnh đồng hồ bằng libfaketime**: 14 lần sang tháng đều đúng partition (`test_partition_clock.py`). Kèm: quét toàn bộ INV-4 hằng tháng giờ cũng được lên lịch (trước đó không ai gọi) |
-| 20 | Backup + khôi phục Postgres cửa hàng (quy trình, chạy thử một lần) | Must — 2026-09-25: ✅ sidecar `edge-backup-*` (hằng ngày, giữ 7), ✅ `store_backup.py verify` đã chạy (khôi phục vào DB tạm, 7 bảng khớp). ⏳ `restore` thật trên DB cửa hàng chưa chạy thử |
+| 20 | Backup + khôi phục Postgres cửa hàng (quy trình, chạy thử một lần) | Must — 2026-09-25: ✅ sidecar `edge-backup-*` (hằng ngày, giữ 7), ✅ `store_backup.py verify` đã chạy (khôi phục vào DB tạm, 7 bảng khớp). ✅ **`restore` thật** (workflow `proof` 2026-09-28, `test_restore.py`): đơn sau backup mất ở cửa hàng nhưng còn ở trung tâm, outbox gửi lại vẫn `CONVERGED`, bán tiếp được ngay |
 | 20 | Cập nhật docs bằng số liệu đo thật; README chạy thử từ `git clone` | |
 
 ### 🚪 Cổng B (nghiệm thu POC)
@@ -175,14 +175,14 @@ thử nghiệm ở [08 §6](08-reliability-and-scale.md).
 - [x] **CH-1…CH-7 đều đạt**, sau mỗi kịch bản `audit` = `CONVERGED`. Đặc biệt CH-3 (`kill -9` Postgres → 0 giao dịch đã commit bị mất) — 2026-09-25 ([progress](progress/2026-09-25-giai-doan-b-chung-minh.md))
 - [ ] **Test ngâm 72h:** bộ nhớ không rò rỉ, `outbox` không bloat, p95 không trôi, `audit` không lần nào `DIVERGED`
 - [ ] **DI-1…DI-5** đều xanh
-- [ ] Mọi ngưỡng cảnh báo đã cấu hình và **đã kích hoạt thử được** — 🟡 21/21 cấu hình, 16/21 đã kích hoạt thử
+- [ ] Mọi ngưỡng cảnh báo đã cấu hình và **đã kích hoạt thử được** — 🟡 21/21 cấu hình, 19/21 đã kích hoạt thử (còn `rs-db-pool`, `rs-transform`)
 - [x] Partition tháng sau tự tồn tại — `central-maintenance` + test chỉnh đồng hồ (libfaketime)
 
 **Scale**
-- [ ] **LD-1…LD-4 đạt mục tiêu** p95, bộ giả lập < 50% CPU trong mọi phép đo
+- [ ] **LD-1…LD-4 đạt mục tiêu** p95, bộ giả lập < 50% CPU trong mọi phép đo — 🟡 LD-1 ✅, LD-4 ✅, **LD-2 🔴** (p95 > 1 s từ ~164 sự kiện/giây), LD-3 ⏳
 - [ ] 50 triệu dòng ledger, partition pruning được chứng minh bằng `EXPLAIN`
 - [ ] Dữ liệu T2 trong ClickHouse, truy vấn lớp C < 3 s
-- [ ] 200 kết nối đồng thời tới trung tâm: không lỗi, hoặc 503 tử tế
+- [x] 200 kết nối đồng thời tới trung tâm: không lỗi, hoặc 503 tử tế — LD-4 trên runner CI 2026-09-28: 1.698 × `200`, 3.264 × `503` đều có `Retry-After`, 0 lỗi
 - [ ] Số đo thật đã ghi ngược vào [02-scale-capacity.md](02-scale-capacity.md)
 
 **Vận hành**
@@ -266,6 +266,8 @@ và trả hàng (Should) chưa làm — dashboard dời lên đầu giai đoạn
 
 *Changelog: 2026-09-24 — ngày 11 và 13 xong (Airflow 3, dbt S6, DAG); spike S1, S3 ✅ kèm số
 đo; cổng A tick 4/8 mục, sửa mục "Σ `line_total`" thành "Σ `net_amount`".*
+
+*Changelog: 2026-10-07 — giai đoạn B theo kết quả workflow `proof` (runner CI): cảnh báo 19/21, `restore` thật ✅, LD-1/LD-4 ✅, LD-2 và overhead OTel 🔴 chờ quyết định.*
 
 *Changelog: 2026-09-23 — viết lại từ tuần 2 trở đi theo [ADR-010](adr/010-data-flow-first.md):
 ba giai đoạn A (luồng dữ liệu) → B (chứng minh) → C (tính năng); bộ giả lập kéo từ ngày 16 lên
