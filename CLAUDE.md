@@ -106,8 +106,10 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
   gây sự cố thật trên stack dev. `docker update --cpus 0` KHÔNG gỡ giới hạn CPU — đặt lại bằng số CPU
   của máy ảo. (8) Webhook Grafana không có uid rule trong nhãn — `alert-sink` lấy từ `generatorURL`.
   (9) Heartbeat là UPSERT `store_sync_status` — cửa hàng chưa từng bán phải hiện ra với `rs-store-silent`.
-  (10) Mọi phép trừ ngày trong ClickHouse dùng `toDate32` (`toDate(1970-01-01) - 7` tràn thành 2149 —
-  bộ giám sát từng báo "0 đơn chờ dbt" trên stack sạch). Lỗi kiểu này chỉ lộ trên máy SẠCH → workflow `proof`.
+  (10) Mốc ngày có thể trước 1970 (`1970-01-01 - 7`) thì tính ở PYTHON và kẹp — `toDate32` KHÔNG đủ khi
+  so với cột `Date` (ClickHouse ép hằng về `Date` → tràn thành 2149; bộ giám sát từng báo "0 đơn chờ dbt"
+  trên stack sạch). (11) Test tích hợp KHÔNG dùng ngày cố định chạm partition `point_ledger` (chỉ giữ tháng
+  trước + 3 tháng tới) — `date(2026, 8, 31)` đỏ từ 1/10. Lỗi kiểu này chỉ lộ trên máy SẠCH → workflow `proof`.
 
 **Sync worker — quy tắc không được phá:** mất mạng/401/503 là lỗi của ĐƯỜNG TRUYỀN, không bao
 giờ tăng `outbox.attempts`. Chỉ khi trung tâm xét và từ chối một sự kiện mới tính lượt thử.

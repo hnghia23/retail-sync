@@ -1,15 +1,16 @@
 """Chế độ `virtual` trên Central API THẬT (ASGI) + Postgres thật — docs/18 §3, §5.
 
 Ba cửa hàng ảo, hai ngày vắt qua cuối tháng, bật cả ba tật của cổng A: một cửa hàng offline
-qua đêm 31/8 → 1/9, lô đã nhận bị gửi lại, khách mua chéo cửa hàng. Đáp án là envelope bộ giả
-lập đã dựng; bộ đối soát phải ra `CONVERGED` ở L0→L2 từng đơn, từng điểm.
+qua đêm cuối tháng trước → ngày 1 tháng này, lô đã nhận bị gửi lại, khách mua chéo cửa hàng.
+Đáp án là envelope bộ giả lập đã dựng; bộ đối soát phải ra `CONVERGED` ở L0→L2 từng đơn, từng
+điểm.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import uuid
-from datetime import date
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -26,7 +27,10 @@ from tests.integration.conftest import Central
 
 CATALOG = {f"P{i:03d}": 5_000 + 1_500 * i for i in range(80)}
 DAYS = 2
-START = date(2026, 8, 31)
+# Ngày cuối của THÁNG TRƯỚC, tính theo hôm nay — không bao giờ là một ngày cố định. Partition
+# `point_ledger` chỉ giữ tháng trước + 3 tháng tới (migration 0006): `date(2026, 8, 31)` cố định
+# chạy xanh tới hết tháng 9 rồi đỏ từ 1/10 (điểm ngày 31/8 không còn partition → dead-letter).
+START = datetime.now(UTC).date().replace(day=1) - timedelta(days=1)
 EXTRA_STORE = "store-v03"
 
 
@@ -143,7 +147,7 @@ async def test_virtual_stores_with_all_gate_a_quirks_converge_at_central(
 
     # Vắt qua cuối tháng: có đơn cả hai tháng, ngày kinh doanh đúng theo giờ cửa hàng.
     days = {s.business_date for r in manifest.stores.values() for s in r.sales.values()}
-    assert days == {"2026-08-31", "2026-09-01"}
+    assert days == {START.isoformat(), (START + timedelta(days=1)).isoformat()}
 
     dbname = await central.db.fetchval("SELECT current_database()")
     report = await audit(manifest, edge_dsns={}, central_dsn=_dsn(central, postgres_dsn, dbname))

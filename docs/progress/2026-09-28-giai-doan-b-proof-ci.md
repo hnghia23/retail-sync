@@ -76,7 +76,7 @@ và `rs-ingest-p95` (LD-2) cũng kêu và tới `alert-sink`.
 | Test | Nguyên nhân | Loại | Sửa |
 |---|---|---|---|
 | `store_offline_70min` (`rs-store-silent` không hề `pending` sau 100 phút) | Heartbeat của trung tâm là `UPDATE` → cửa hàng **chưa từng gửi sự kiện** không có dòng `store_sync_status` → vô hình với cảnh báo. Trên laptop store-003 có lịch sử nên không lộ | **Lỗi hệ thống** | Heartbeat thành UPSERT + test tích hợp `test_heartbeat_of_a_store_that_never_sold_makes_it_visible` |
-| `transform_stalls` (80 phút không thấy đơn chờ dbt) | Bộ giám sát: fact rỗng → mốc 1970-01-01, `toDate(1970-01-01) - 7` **tràn `Date`** thành năm 2149 → lọc mất mọi đơn → báo 0 | **Lỗi hệ thống** (cùng họ lỗi tràn ngày ở dbt) | `toDate32` + test tích hợp `test_first_sales_waiting_for_dbt_are_counted_while_the_fact_is_still_empty` |
+| `transform_stalls` (80 phút không thấy đơn chờ dbt) | Bộ giám sát: fact rỗng → mốc 1970-01-01, `toDate(1970-01-01) - 7` **tràn `Date`** thành năm 2149 → lọc mất mọi đơn → báo 0 | **Lỗi hệ thống** (cùng họ lỗi tràn ngày ở dbt) | Mốc dưới tính ở Python, kẹp ở 1970-01-01 + test tích hợp `test_first_sales_waiting_for_dbt_are_counted_while_the_fact_is_still_empty`. ⚠️ Bản sửa đầu (`toDate32`) **sai**: so với cột `Date`, ClickHouse ép hằng về `Date` nên vẫn tràn — test mới bắt được trên CI (2026-10-07) |
 | `drift` | Stack sạch chưa có khách nào có điểm | Lỗi test | Test tự bán 4 đơn cho khách mới qua Edge API trước |
 | `slow_store` (`rs-db-pool`, `rs-sales-p95` không kêu) | Runner nhanh hơn laptop: DB ở 5% CPU vẫn theo kịp 4 đơn/s (p95 client 544 ms, rule lượn `pending` ↔ `inactive`) | Sự cố gây ra chưa đủ nặng | 2% CPU, 8 đơn/s, bóp SAU khi mở ca. Ngưỡng giữ nguyên |
 | `slow_central` (`rs-ingest-p95` không kêu; `rs-store-lag` kêu) | 5 cửa hàng ảo không giữ đủ lô đồng thời | Sự cố chưa đủ nặng | 20 cửa hàng, 5% CPU |
@@ -99,6 +99,13 @@ nhưng **độ trễ vượt 1 s ở dưới tải thiết kế**. Nghi phạm s
 uvicorn (= một nhân), lại đang trace 100% (overhead ở trên). Runner cũng chia 4 nhân cho cả stack ~30
 container và bộ giả lập. Lượt sau sẽ có CPU từng bậc để phân biệt "nghẽn một nhân" với "nghẽn DB".
 Tăng số worker không phải sửa nhỏ: rate limit theo cửa hàng đang nằm trong bộ nhớ một tiến trình.
+
+**CI 2026-10-07 (commit `5130782`) đỏ ở `integration`**, hai test, chạy lại trên máy để chẩn đoán:
+- Test monitor mới: bản sửa `toDate32` sai (xem bảng trên) — sửa lại, test xanh.
+- `test_virtual_stores_with_all_gate_a_quirks_converge_at_central`: **bom hẹn giờ trong test**, không
+  liên quan heartbeat. `START = date(2026, 8, 31)` cố định; từ 1/10 tháng 8 không còn là "tháng trước"
+  nên không còn partition `point_ledger` → điểm của đơn 31/8 bị từ chối vĩnh viễn → dead-letter. Giờ
+  `START` = ngày cuối tháng trước, tính theo hôm nay.
 
 ## 5. Trạng thái
 

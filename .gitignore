@@ -38,3 +38,4 @@ main.ipynb
 
 # Kết quả chạy bộ giả lập (manifest, audit) — docs/18 §6
 runs/
+logs/
