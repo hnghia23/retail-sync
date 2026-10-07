@@ -114,9 +114,19 @@ async def test_drill_drift_is_found_by_the_full_scan(stack: Stack) -> None:
     )
     results.append(await _expect("rs-reconcile-full", within=300))
 
-    customer = _psql(
-        stack, "SELECT customer_id FROM point_balance ORDER BY updated_at DESC LIMIT 1"
-    ).strip()
+    latest = "SELECT customer_id FROM point_balance ORDER BY updated_at DESC LIMIT 1"
+    if not _psql(stack, latest).strip():
+        # Stack sạch (CI): chưa khách nào có điểm. Bán vài đơn cho khách mới qua Edge API thật.
+        seeded = await run_edge_plans(
+            stack, "drill-drift-seed", {"store-001": sales_plan(duration=20, sales=4, seed=89,
+                                                                new_share=1.0)}
+        )  # fmt: skip
+        settled = await audit_until_settled(
+            seeded, edge_dsns={"store-001": edge_dsn(stack, "store-001")},
+            central_dsn=stack.central_dsn, wait_seconds=300, poll_seconds=3,
+        )  # fmt: skip
+        assert settled.status == CONVERGED
+    customer = _psql(stack, latest).strip()
     assert customer
     _psql(stack, f"UPDATE point_balance SET balance = balance + 1 WHERE customer_id = '{customer}'")
     try:
@@ -271,20 +281,26 @@ async def test_drill_monitor_loses_the_lake(stack: Stack) -> None:
 
 
 async def test_drill_slow_store_database(stack: Stack) -> None:
-    """rs-sales-p95 + rs-db-pool: Postgres của store-002 bị bóp còn 5% một CPU trong khi quầy vẫn
-    bán dồn dập → chốt đơn p95 > 500 ms suốt 10 phút, pool kết nối > 80% suốt 5 phút."""
+    """rs-sales-p95 + rs-db-pool: Postgres của store-002 bị bóp còn 2% một CPU trong khi quầy vẫn
+    bán dồn dập → chốt đơn p95 > 500 ms suốt 10 phút, pool kết nối > 80% suốt 5 phút.
+
+    Bộ giả lập là vòng hở: request chỉ dồn lại (pool đầy) khi nhịp đến VƯỢT sức DB. Bản đầu (5% CPU,
+    4 đơn/s) đủ trên laptop nhưng runner CI nhanh hơn theo kịp — p95 lượn quanh 500 ms, pool không
+    bao giờ quá 80% (workflow `proof` 2026-09-28). Giờ 2% CPU và 8 đơn/s: quá tải cả trên máy
+    nhanh."""
     store = "store-002"
     db = container_of(f"edge-db-{store}")
-    docker("update", "--cpus", "0.05", db)
-    try:
-        run = asyncio.create_task(
-            run_edge_plans(
-                stack,
-                "drill-slow-store",
-                {store: sales_plan(duration=16 * 60, sales=16 * 60 * 4, seed=91, tail=30)},
-                request_timeout=60,
-            )
+    run = asyncio.create_task(
+        run_edge_plans(
+            stack,
+            "drill-slow-store",
+            {store: sales_plan(duration=16 * 60, sales=16 * 60 * 8, seed=91, start=20, tail=30)},
+            request_timeout=60,
         )
+    )
+    await asyncio.sleep(15)  # đăng nhập + mở ca khi DB còn nhanh — bóp sau
+    docker("update", "--cpus", "0.02", db)
+    try:
         results = [
             await _expect("rs-db-pool", within=900),
             await _expect("rs-sales-p95", within=900),
@@ -302,19 +318,22 @@ async def test_drill_slow_store_database(stack: Stack) -> None:
 
 
 async def test_drill_slow_central_database(stack: Stack) -> None:
-    """rs-ingest-p95 + rs-store-lag: Postgres trung tâm bị bóp còn 10% CPU dưới tải của 5 cửa
-    hàng ảo đẩy lịch sử (occurred_at vài ngày trước → trễ đồng bộ > 15 phút là THẬT)."""
+    """rs-ingest-p95 + rs-store-lag: Postgres trung tâm bị bóp còn 5% CPU dưới tải của 20 cửa
+    hàng ảo đẩy lịch sử (occurred_at vài ngày trước → trễ đồng bộ > 15 phút là THẬT).
+
+    Bản đầu (10% CPU, 5 cửa hàng) chỉ kêu được `rs-store-lag` trên runner CI: 5 cửa hàng gửi tuần
+    tự không bao giờ giữ đủ lô đồng thời để p95 vượt 1 s (workflow `proof` 2026-09-28)."""
     from simulator.__main__ import main as simulator
 
     keys = ROOT / "runs" / "virtual-keys.env"
     db = container_of("central-db")
-    docker("update", "--cpus", "0.1", db)
+    docker("update", "--cpus", "0.05", db)
     try:
         run = asyncio.create_task(
             asyncio.to_thread(
                 simulator,
                 ["run", "--mode", "virtual", "--profile", "t2", "--keys", str(keys),
-                 "--stores", "5", "--days", "2", "--rate", "90", "--seed", "92",
+                 "--stores", "20", "--days", "2", "--rate", "90", "--seed", "92",
                  "--central", stack.central_url, "--drain-timeout", "1800"],
             )
         )  # fmt: skip

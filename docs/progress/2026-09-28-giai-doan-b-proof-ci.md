@@ -63,10 +63,47 @@ Trước đây chỉ có `verify` (khôi phục thử vào database tạm). Test
 
 Opt-in bằng `RETAIL_SYNC_CHAOS=1` (thay database thật).
 
-## 4. Trạng thái
+## 4. Lượt chạy đầu (2026-09-28, commit `8f9c559`) — 2 nhóm xanh, 4 nhóm đỏ
 
-Code + workflow xong, **chưa chạy lần nào**: các test mới chưa từng chạy trên Docker thật. Cần chủ dự án
-push rồi bấm chạy. Kết quả sẽ ghi vào đây và vào bảng cảnh báo của nhật ký 2026-09-25 §5.
+Artifact đọc từ `runs/proof-ci/` (chủ dự án tải tay). Runner: 4 vCPU, 16 GB.
+
+**Xanh:** `restore` (khôi phục thật đạt cả 4 điều kiện ở §3), `drill-pipeline_and_maintenance_stop`
+(**`rs-loaded-until`, `rs-maintenance` kêu lần đầu**). Trong nhóm `load`, `rs-central-pg-conn` (LD-4)
+và `rs-ingest-p95` (LD-2) cũng kêu và tới `alert-sink`.
+
+**Đỏ, phân loại theo nguyên nhân:**
+
+| Test | Nguyên nhân | Loại | Sửa |
+|---|---|---|---|
+| `store_offline_70min` (`rs-store-silent` không hề `pending` sau 100 phút) | Heartbeat của trung tâm là `UPDATE` → cửa hàng **chưa từng gửi sự kiện** không có dòng `store_sync_status` → vô hình với cảnh báo. Trên laptop store-003 có lịch sử nên không lộ | **Lỗi hệ thống** | Heartbeat thành UPSERT + test tích hợp `test_heartbeat_of_a_store_that_never_sold_makes_it_visible` |
+| `transform_stalls` (80 phút không thấy đơn chờ dbt) | Bộ giám sát: fact rỗng → mốc 1970-01-01, `toDate(1970-01-01) - 7` **tràn `Date`** thành năm 2149 → lọc mất mọi đơn → báo 0 | **Lỗi hệ thống** (cùng họ lỗi tràn ngày ở dbt) | `toDate32` + test tích hợp `test_first_sales_waiting_for_dbt_are_counted_while_the_fact_is_still_empty` |
+| `drift` | Stack sạch chưa có khách nào có điểm | Lỗi test | Test tự bán 4 đơn cho khách mới qua Edge API trước |
+| `slow_store` (`rs-db-pool`, `rs-sales-p95` không kêu) | Runner nhanh hơn laptop: DB ở 5% CPU vẫn theo kịp 4 đơn/s (p95 client 544 ms, rule lượn `pending` ↔ `inactive`) | Sự cố gây ra chưa đủ nặng | 2% CPU, 8 đơn/s, bóp SAU khi mở ca. Ngưỡng giữ nguyên |
+| `slow_central` (`rs-ingest-p95` không kêu; `rs-store-lag` kêu) | 5 cửa hàng ảo không giữ đủ lô đồng thời | Sự cố chưa đủ nặng | 20 cửa hàng, 5% CPU |
+| `otel_overhead` | p95 chốt đơn **11 → 28 ms (+146%)**, p50 +30%, CPU edge-api 8 → 13%, lặp lại y hệt ở 2 lần đo. Test chặn ở "< 50%" coi đó là phép đo hỏng | **Số đo thật**, test sai giả định | Đo thêm chế độ trace 10% (`infra/chaos/otel-sampled.compose.yaml`); test chỉ chặn khi phép đo không lặp lại được (lệch > 30%). Ghi `adr009_within_5pct` |
+| `ld2` | p95 server `POST /events` > 1 s từ bậc 50 cửa hàng ảo | **Số đo thật** — xem dưới | Thêm `events_per_second` và CPU central-api/central-db mỗi bậc |
+
+**LD-2 là phát hiện cần chủ dự án quyết.** Test nén một ngày 15 giờ vào 5 phút (×180; docs/16 §4 bản
+nháp ghi ×10). Quy ra tải thật:
+
+| Bậc (cửa hàng ảo) | Sự kiện/giây | p95 server | Bị từ chối (429/503) | Đúng dữ liệu |
+|---|---|---|---|---|
+| 10 | ~36 | 0,09 s | 2 | CONVERGED |
+| 50 | ~164 | **1,6 s** | 1.831 | CONVERGED |
+| 100 | ~197 | **2,8 s** | 6.478 | CONVERGED |
+| 200 | ~291 | **2,2 s** | 19.826 | CONVERGED |
+
+Tải thiết kế ở docs/02 §1 là ~260 lượt ghi/giây (T3, 2000 cửa hàng, đỉnh lễ Tết). Như vậy trên runner
+này, **dữ liệu luôn đúng** (0 mất, 0 dead-letter, mọi bậc CONVERGED, mọi từ chối đều có `Retry-After`),
+nhưng **độ trễ vượt 1 s ở dưới tải thiết kế**. Nghi phạm số 1: `central-api` chạy MỘT tiến trình
+uvicorn (= một nhân), lại đang trace 100% (overhead ở trên). Runner cũng chia 4 nhân cho cả stack ~30
+container và bộ giả lập. Lượt sau sẽ có CPU từng bậc để phân biệt "nghẽn một nhân" với "nghẽn DB".
+Tăng số worker không phải sửa nhỏ: rate limit theo cửa hàng đang nằm trong bộ nhớ một tiến trình.
+
+## 5. Trạng thái
+
+Đã sửa (commit sau `8f9c559`) nhưng **chưa chạy lại**. Cần push rồi chạy lại `proof` (`all`). Hai test
+tích hợp mới chạy trong job `integration` của CI thường.
 
 Sau `proof`, việc còn lại của cổng B: LD-3 (bản dbt cũ và mới), seam 50 triệu dòng ledger, ghi số vào
 docs/02, test ngâm 72h. Các việc này cần một máy chạy liên tục (VPS) hoặc máy dev lúc rảnh.

@@ -122,11 +122,16 @@ async def test_ld1_one_store_peak_hour(stack: Stack) -> None:
     assert settled.status == CONVERGED, settled.findings[:5]
 
 
-def _edge_api(otel: bool) -> None:
-    """Dựng lại edge-api-store-001 có / không có OpenTelemetry (endpoint rỗng = tắt hẳn SDK)."""
+#: Chế độ đo overhead → file override (None = cấu hình compose thường: trace 100% + metric).
+OTEL_MODES = {"on": None, "off": "otel-off.compose.yaml", "sampled": "otel-sampled.compose.yaml"}
+
+
+def _edge_api(mode: str) -> None:
+    """Dựng lại edge-api-store-001 ở một chế độ OTel: `on` (trace 100%), `off` (endpoint rỗng =
+    tắt hẳn SDK), `sampled` (trace 10%, metric giữ nguyên)."""
     files = ["-f", str(ROOT / "infra" / "compose.yaml")]
-    if not otel:
-        files += ["-f", str(ROOT / "infra" / "chaos" / "otel-off.compose.yaml")]
+    if (override := OTEL_MODES[mode]) is not None:
+        files += ["-f", str(ROOT / "infra" / "chaos" / override)]
     subprocess.run(  # noqa: S603
         ["docker", "compose", "-p", "retail-sync", *files, "--env-file", str(ENV_FILE),  # noqa: S607
          "--profile", "edge", "up", "-d", "--no-deps", "edge-api-store-001"],
@@ -142,15 +147,21 @@ async def _sample_cpu(name: str, into: list[float]) -> None:
 
 
 async def test_otel_overhead(stack: Stack) -> None:
-    """ADR-009: overhead của instrumentation (trace 100% + metric) trên chốt đơn. Chạy xen kẽ
-    BẬT/TẮT/BẬT/TẮT cùng một lịch (10 đơn/s, 3 phút) để trôi nền của máy không đổ lên một bên.
-    Đạt: p50 và p95 tăng ≤ 5% — vượt thì phải giảm tỉ lệ lấy mẫu."""
+    """ADR-009: overhead của instrumentation trên chốt đơn, ở hai mức: `on` (trace 100% + metric,
+    cấu hình hiện tại) và `sampled` (trace 10%), so với `off`. Chạy xen kẽ hai vòng cùng một lịch
+    (10 đơn/s, 3 phút) để trôi nền của máy không đổ lên một bên.
+
+    Điều kiện ADR-009 (tăng ≤ 5%) được GHI, không chặn: vượt là quyết định giảm lấy mẫu, cần người
+    — và `sampled` cho sẵn con số để quyết. Test chỉ chặn khi PHÉP ĐO không đáng tin: hai lần chạy
+    cùng chế độ lệch nhau quá 30% ở p95. (Bản đầu chặn "overhead p95 < 50%" như một phép kiểm "bất
+    thường"; runner CI đo +146% — 11 → 28 ms — lặp lại y hệt ở cả hai lần: đó là SỐ ĐO, không phải
+    phép đo hỏng, workflow `proof` 2026-09-28.)"""
     store = "store-001"
     url = EDGE[store][0]
-    runs: dict[str, list[dict[str, Any]]] = {"on": [], "off": []}
+    runs: dict[str, list[dict[str, Any]]] = {mode: [] for mode in OTEL_MODES}
     try:
-        for i, mode in enumerate(("on", "off", "on", "off")):
-            await asyncio.to_thread(_edge_api, mode == "on")
+        for i, mode in enumerate(("on", "off", "sampled", "on", "off", "sampled")):
+            await asyncio.to_thread(_edge_api, mode)
             await wait_up(url, within=120)
             await asyncio.sleep(10)  # khởi động nguội: pool, JIT của asyncpg, cache sản phẩm
             cpu: list[float] = []
@@ -167,27 +178,40 @@ async def test_otel_overhead(stack: Stack) -> None:
             mean_cpu = round(sum(cpu) / len(cpu), 1) if cpu else None
             runs[mode].append(_stats(m) | {"edge_api_cpu_pct_mean": mean_cpu})
     finally:
-        await asyncio.to_thread(_edge_api, True)
+        await asyncio.to_thread(_edge_api, "on")
         await wait_up(url, within=120)
 
     def mean(mode: str, q: str) -> float:
         vals = [float(r["latency_ms"]["sales"][q]) for r in runs[mode]]
         return sum(vals) / len(vals)
 
-    overhead = {q: round(mean("on", q) / mean("off", q) - 1, 4) for q in ("p50", "p95")}
-    cpu_on = [r["edge_api_cpu_pct_mean"] for r in runs["on"] if r["edge_api_cpu_pct_mean"]]
-    cpu_off = [r["edge_api_cpu_pct_mean"] for r in runs["off"] if r["edge_api_cpu_pct_mean"]]
+    def cpu_of(mode: str) -> float | None:
+        vals = [r["edge_api_cpu_pct_mean"] for r in runs[mode] if r["edge_api_cpu_pct_mean"]]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    overhead = {
+        mode: {q: round(mean(mode, q) / mean("off", q) - 1, 4) for q in ("p50", "p95")}
+        for mode in ("on", "sampled")
+    }
+    spread = {
+        mode: round(abs(p95s[0] - p95s[1]) / min(p95s), 4)
+        for mode in OTEL_MODES
+        if len(p95s := [float(r["latency_ms"]["sales"]["p95"]) for r in runs[mode]]) == 2
+    }
     result = {
         "runs": runs,
         "latency_overhead": overhead,
-        "cpu_on_mean": sum(cpu_on) / len(cpu_on) if cpu_on else None,
-        "cpu_off_mean": sum(cpu_off) / len(cpu_off) if cpu_off else None,
+        "adr009_within_5pct": {m: o["p95"] <= 0.05 for m, o in overhead.items()},
+        "edge_api_cpu_pct_mean": {mode: cpu_of(mode) for mode in OTEL_MODES},
+        "p95_spread_between_repeats": spread,
     }
     report("load", "OTEL-overhead", result)
-    for r in runs["on"] + runs["off"]:
+    for r in (r for rs in runs.values() for r in rs):
         assert r["cpu_share"] is not None and r["cpu_share"] < 0.5
-    # Điều kiện ADR-009 được GHI, không chặn test: vượt 5% là quyết định giảm lấy mẫu, cần người.
-    assert overhead["p95"] < 0.5, f"overhead bất thường: {overhead}"
+        assert r["unknown"] == 0 and r["rejected"] == 0
+    assert len(spread) == len(OTEL_MODES)
+    for mode, s in spread.items():
+        assert s < 0.3, f"{mode}: hai lần đo lệch p95 {s:.0%} — phép đo không lặp lại được"
 
 
 # ═══════════════════════════════ LD-2 ═══════════════════════════════
@@ -247,16 +271,31 @@ def _client_latency(manifest: Manifest) -> dict[str, Any]:
 async def test_ld2_virtual_stores_10_to_200(stack: Stack) -> None:
     """LD-2: 10 → 50 → 100 → 200 cửa hàng ảo (T2) cùng đẩy đồng bộ, mỗi bậc ~5 phút. Đạt: trung
     tâm giữ p95 `POST /events` < 1 s (phía server) ở mọi bậc — hoặc từ chối tử tế (503/429 có
-    `Retry-After`) chứ không lỗi; mọi sự kiện tới đủ (`CONVERGED`); bộ giả lập < 50% CPU."""
+    `Retry-After`) chứ không lỗi; mọi sự kiện tới đủ (`CONVERGED`); bộ giả lập < 50% CPU.
+
+    Nhịp ×180 (một ngày mở cửa 15 giờ trong 5 phút), KHÔNG phải ×10 như bản nháp ở docs/16 §4:
+    ×10 với 200 cửa hàng chỉ ~16 sự kiện/giây, xa dưới tải thiết kế. Mỗi bậc ghi `events_per_second`
+    để so với ~260 lượt ghi/giây của docs/02 §1, và CPU của central-api/central-db để biết nghẽn ở
+    đâu khi p95 vượt ngưỡng."""
     lines = await asyncio.to_thread(_ensure_ld2_keys, stack, 200)
     rate = 15 * 3600 / 300  # một ngày mở cửa (15 giờ) trong 5 phút
     steps: dict[str, Any] = {}
     for stores in (10, 50, 100, 200):
         refused0 = prom("sum(ingest_batches_refused_total) or vector(0)") or 0.0
         t0 = time.time()
-        manifests = await asyncio.to_thread(
-            _run_virtual_split, stack, lines, stores=stores, per_process=50, rate=rate, seed=stores
-        )
+        # CPU của trung tâm trong suốt bậc: `central-api` là MỘT tiến trình uvicorn (rate limit
+        # trong bộ nhớ một tiến trình), nên chạm ~100% = nghẽn một nhân, không phải DB.
+        cpu: dict[str, list[float]] = {"central-api": [], "central-db": []}
+        samplers = [asyncio.create_task(_sample_cpu(container_of(s), v)) for s, v in cpu.items()]
+        try:
+            manifests = await asyncio.to_thread(
+                _run_virtual_split, stack, lines, stores=stores, per_process=50, rate=rate,
+                seed=stores,
+            )  # fmt: skip
+        finally:
+            for t in samplers:
+                t.cancel()
+            await asyncio.gather(*samplers, return_exceptions=True)
         elapsed = time.time() - t0
         await asyncio.sleep(35)  # hai chu kỳ đẩy metric
         window = f"{int(elapsed) + 35}s"
@@ -284,6 +323,14 @@ async def test_ld2_virtual_stores_10_to_200(stack: Stack) -> None:
             "seconds": round(elapsed),
             "sales": sum(len(r.sales) for r in records),
             "events_sent": total("sent"),
+            # Quy đổi ra tải thật: docs/02 §1 thiết kế test tải theo ~260 lượt ghi/giây (T3 2000
+            # cửa hàng, giờ cao điểm 35%, ×2 lễ Tết). "N cửa hàng ảo" ở nhịp nén ×180 KHÔNG phải N
+            # cửa hàng thật.
+            "events_per_second": round(total("sent") / elapsed, 1) if elapsed else None,
+            "cpu_pct_mean_max": {
+                s: [round(sum(v) / len(v), 1), round(max(v), 1)] if v else None
+                for s, v in cpu.items()
+            },
             "transport_errors": total("transport_errors"),
             "pending": total("pending"),
             "dead": total("dead"),

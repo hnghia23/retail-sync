@@ -154,6 +154,31 @@ async def test_transform_lag_rises_when_dbt_falls_behind_and_returns_to_zero(
     assert again.value("pipeline_transform_lag_seconds") == 0
 
 
+async def test_first_sales_waiting_for_dbt_are_counted_while_the_fact_is_still_empty(
+    env: Env, dbt: Dbt
+) -> None:
+    """dbt đã dựng mart nhưng CHƯA có đơn nào (go-live, stack sạch) → mốc "fact đã có tới" là
+    1970-01-01. Bản cũ lọc `_dt >= toDate(1970-01-01) - 7`: `Date` tràn thành năm 2149, mọi đơn bị
+    lọc mất, `rs-transform` không bao giờ kêu được (workflow `proof` 2026-09-28)."""
+    await _seed(env.db, sales=0)
+    await _settle()
+    await env.run()
+    built = dbt.build()
+    assert built.returncode == 0, built.stdout[-3000:]
+
+    shift = await env.db.fetchval("SELECT shift_id FROM shift_replica LIMIT 1")
+    await _sale(env.db, shift, amount=10_000)
+    await _sale(env.db, shift, amount=20_000)
+    await _settle()
+    await env.run()
+
+    behind = await collect(env.cfg, env.lake, env.ch)
+    assert behind.errors == {}
+    assert behind.value("pipeline_transform_pending_sales") == 2
+    lag = behind.value("pipeline_transform_lag_seconds")
+    assert lag is not None and lag > 1
+
+
 async def test_dead_source_is_reported_down_without_hiding_the_others(env: Env) -> None:
     await _seed(env.db)
     await _sync_status(env.db)

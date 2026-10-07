@@ -621,6 +621,21 @@ async def test_empty_batch_is_a_heartbeat_that_marks_the_store_seen(
     assert age < 60 and lag == 0 and status == "OK"
 
 
+async def test_heartbeat_of_a_store_that_never_sold_makes_it_visible(central: Central) -> None:
+    """Cửa hàng chưa từng gửi sự kiện nào vẫn phải có dòng sau heartbeat đầu tiên — không thì
+    `rs-store-silent` không bao giờ thấy nó khi worker chết (workflow `proof`, 2026-09-28)."""
+    await central.db.execute("DELETE FROM store_sync_status WHERE store_id = $1", STORE_ID)
+    await central.client().push([])
+    row = await central.db.fetchrow(
+        "SELECT last_event_at, lag_seconds, status, EXTRACT(EPOCH FROM now() - updated_at) AS age"
+        " FROM store_sync_status WHERE store_id = $1",
+        STORE_ID,
+    )
+    assert row is not None, "heartbeat của cửa hàng mới không để lại dấu vết nào"
+    assert row["last_event_at"] is None and row["lag_seconds"] == 0 and row["status"] == "OK"
+    assert row["age"] < 60
+
+
 async def test_idle_worker_detects_lost_central_through_heartbeat(edge: Any) -> None:
     """Không có gì để gửi mà trung tâm mất: không có heartbeat thì worker không bao giờ biết, và
     `sync_consecutive_failures` (circuit breaker, docs/08 §5) đứng ở 0 đúng lúc phải kêu."""

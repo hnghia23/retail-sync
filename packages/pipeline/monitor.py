@@ -263,11 +263,13 @@ def _warehouse(health: FlowHealth, ch: ClickHouse) -> None:
     [[built]] = ch.rows("SELECT toString(max(_recorded_at)) FROM fact_sale_line")
     since = _ts(built) or datetime(1970, 1, 1, tzinfo=UTC)
     # Đơn ĐÃ nạp (dưới mép) mà fact chưa có: đúng tập mà lượt dbt sau sẽ dựng (bẫy 5). Lọc
-    # thêm `_dt` để ClickHouse chỉ mở các phân vùng tháng gần mép.
+    # thêm `_dt` để ClickHouse chỉ mở các phân vùng tháng gần mép. `toDate32`, KHÔNG `toDate`:
+    # fact rỗng → `since` = 1970-01-01, và `Date` trừ 7 ngày từ đó TRÀN thành năm 2149 → lọc mất
+    # mọi đơn, báo "0 đơn chờ" đúng lúc dbt chưa từng chạy được (workflow `proof` 2026-09-28).
     [[pending, oldest]] = ch.rows(
         "SELECT uniqExact(sale_id), toString(min(recorded_at)) FROM bronze_sale"
         f" WHERE recorded_at > {_ch_literal(since)} AND recorded_at < {_ch_literal(until)}"
-        f" AND _dt >= toDate({_ch_literal(since)}) - 7"
+        f" AND _dt >= toDate32({_ch_literal(since)}) - 7"
     )
     health.add("pipeline_transform_pending_sales", int(pending))
     first = _ts(oldest) if int(pending) else None

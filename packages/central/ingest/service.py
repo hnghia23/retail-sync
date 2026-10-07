@@ -87,10 +87,17 @@ _SYNC_STATUS = text(
 #: Heartbeat (lô rỗng): worker chỉ gửi nó khi outbox ĐÃ TRỐNG — cửa hàng không còn gì chưa tới
 #: trung tâm, nên trễ đồng bộ lúc này đúng là 0. Không đặt lại thì "trễ của lô cuối" (một lô xả
 #: tồn đọng nhiều giờ) nằm nguyên đó mãi dù cửa hàng đã bắt kịp, và cảnh báo `rs-store-lag` kêu
-#: vĩnh viễn (thấy ở compose 2026-09-25). Cửa hàng chưa từng gửi sự kiện nào thì chưa có dòng.
+#: vĩnh viễn (thấy ở compose 2026-09-25).
+#:
+#: UPSERT, không UPDATE: cửa hàng mới, chưa bán đơn nào, thì chưa có dòng. Bản UPDATE cũ để nó vô
+#: hình với `rs-store-silent` — worker của nó chết là không ai biết (workflow `proof` 2026-09-28:
+#: stack sạch, worker store-003 chết 100 phút, cảnh báo không hề `pending`).
 _SEEN = text(
-    "UPDATE store_sync_status SET updated_at = now(), lag_seconds = 0, status = 'OK'"
-    " WHERE store_id = :store_id"
+    """
+    INSERT INTO store_sync_status (store_id, lag_seconds, status, updated_at)
+    VALUES (:store_id, 0, 'OK', now())
+    ON CONFLICT (store_id) DO UPDATE SET updated_at = now(), lag_seconds = 0, status = 'OK'
+    """
 )
 
 
