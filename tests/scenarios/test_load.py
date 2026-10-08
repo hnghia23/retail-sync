@@ -163,7 +163,14 @@ async def test_otel_overhead(stack: Stack) -> None:
         for i, mode in enumerate(("on", "off", "sampled", "on", "off", "sampled")):
             await asyncio.to_thread(_edge_api, mode)
             await wait_up(url, within=120)
-            await asyncio.sleep(10)  # khởi động nguội: pool, JIT của asyncpg, cache sản phẩm
+            # Khởi động bằng TẢI THẬT, không tính số: pool kết nối, prepared statement của asyncpg,
+            # cache sản phẩm, exporter OTel. Bản đầu chỉ ngủ 10 s → lần đo đầu sau mỗi lần dựng lại
+            # chậm hẳn (`sampled` lần 1: p50 13,4 ms, lần 2: 8,8 ms — workflow `proof` 2026-10-07).
+            await run_edge_plans(
+                stack, f"otel-warmup-{mode}-{i}",
+                {store: sales_plan(duration=45, sales=400, seed=30 + i, tail=5)},
+                request_timeout=30,
+            )  # fmt: skip
             cpu: list[float] = []
             sampler = asyncio.create_task(_sample_cpu(container_of(f"edge-api-{store}"), cpu))
             try:

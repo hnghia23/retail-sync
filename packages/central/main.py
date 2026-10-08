@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from central.ingest.ratelimit import StoreRateLimiter
 from central.ingest.router import router as ingest_router
-from central.settings import get_otel_settings, get_settings
+from central.settings import get_otel_settings, get_settings, worker_budget
 from shared.db import make_engine, make_session_factory
 from shared.logs import setup_logging
 from shared.metrics import get_meter, register_resource_gauges, setup_metrics
@@ -26,21 +26,29 @@ from shared.tracing import instrument_clients, instrument_fastapi, setup_tracing
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    # Mỗi tiến trình uvicorn chạy lifespan riêng: semaphore, rate limiter, pool đều THEO TIẾN
+    # TRÌNH, nên mỗi tiến trình chỉ lấy phần của nó trong ngân sách tổng (ADR-011).
+    budget = worker_budget(settings)
     engine = make_engine(
         settings.database_url,
         echo=settings.debug,
         server_settings={"transaction_timeout": f"{settings.db_transaction_timeout_seconds}s"},
+        pool_size=budget.pool_size,
+        max_overflow=budget.max_overflow,
     )
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
     # Tạo TRONG lifespan, không ở mức module: semaphore gắn với event loop đang chạy.
-    app.state.ingest_gate = asyncio.Semaphore(settings.ingest_max_concurrency)
+    app.state.ingest_gate = asyncio.Semaphore(budget.ingest_concurrency)
     app.state.store_limiter = StoreRateLimiter(
-        rate=settings.ingest_store_rate_per_second, burst=settings.ingest_store_burst
+        rate=budget.store_rate_per_second, burst=budget.store_burst
     )
     if get_otel_settings().enabled:
         register_resource_gauges(
-            get_meter("central.resources"), engine=engine, attrs={"service": "central-api"}
+            get_meter("central.resources"),
+            engine=engine,
+            attrs={"service": "central-api"},
+            pool_capacity=budget.pool_size + budget.max_overflow,
         )
     try:
         yield

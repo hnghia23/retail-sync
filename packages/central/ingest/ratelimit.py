@@ -11,9 +11,10 @@ Hai cơ chế backpressure khác nhau, chặn hai chuyện khác nhau:
 Cả hai đều là lỗi của ĐƯỜNG TRUYỀN với worker: không đốt lượt thử của sự kiện nào, worker ngủ
 đúng `Retry-After` (CLAUDE.md, quy tắc của sync worker).
 
-Trạng thái nằm trong bộ nhớ của MỘT tiến trình. Chạy N bản Central API thì giới hạn thực là
-N × `rate` — chấp nhận được (mục tiêu là chia lượt, không phải hạn ngạch chính xác). Scale seam:
-chuyển bucket sang Redis khi cần giới hạn chính xác trên nhiều bản.
+Trạng thái nằm trong bộ nhớ của MỘT tiến trình. Central API chạy N tiến trình (ADR-011) thì
+giới hạn thực là N × `rate` khi lô rải đều — chấp nhận được (mục tiêu là chia lượt, không phải hạn
+ngạch chính xác); thực tế gần `rate` hơn vì keep-alive gom lô của một cửa hàng về một tiến trình.
+Scale seam: chuyển bucket sang Redis khi cần giới hạn chính xác trên nhiều MÁY.
 """
 
 from __future__ import annotations

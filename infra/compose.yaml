@@ -326,12 +326,17 @@ services:
 
   central-api:
     build: { context: ../, dockerfile: infra/docker/app.Dockerfile }
-    command: ["uvicorn", "central.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # NHIỀU tiến trình (docs/adr/011): một tiến trình Python chạm trần MỘT nhân từ ~127 sự kiện/giây
+    # (LD-2, workflow `proof` 2026-10-07: central-api 100% CPU, central-db chỉ 13–26%). `--workers`
+    # và biến `CENTRAL_API_WORKERS` PHẢI cùng một số: mỗi tiến trình chia ngân sách Postgres
+    # (semaphore 503, pool) theo nó — lệch thì tổng kết nối vượt hoặc thiếu.
+    command: ["sh", "-c", "exec uvicorn central.main:app --host 0.0.0.0 --port 8000 --workers $${CENTRAL_API_WORKERS}"]
     profiles: ["central"]
     restart: unless-stopped
     depends_on:
       central-db: { condition: service_healthy }
     environment:
+      CENTRAL_API_WORKERS: ${CENTRAL_API_WORKERS:-4}
       DATABASE_URL: postgresql+asyncpg://${CENTRAL_DB_USER:-central_app}:${CENTRAL_DB_PASSWORD}@central-db:5432/central
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
       OTEL_METRIC_EXPORT_INTERVAL: "15000"

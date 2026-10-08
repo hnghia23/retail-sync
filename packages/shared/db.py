@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-#: Kích thước pool của MỌI engine. Metric `db_pool_used_ratio` (docs/08 §5 "db_connections_used
-#: > 80% pool") chia cho đúng tổng này.
+#: Kích thước pool MẶC ĐỊNH của engine. Central API nhiều tiến trình chia nhỏ nó (ADR-011,
+#: `central.settings.worker_budget`); metric `db_pool_used_ratio` chia cho sức chứa THẬT của pool.
 POOL_SIZE = 10
 MAX_OVERFLOW = 10
 
@@ -27,6 +27,8 @@ def make_engine(
     *,
     echo: bool = False,
     server_settings: Mapping[str, str] | None = None,
+    pool_size: int = POOL_SIZE,
+    max_overflow: int = MAX_OVERFLOW,
 ) -> AsyncEngine:
     """Engine async cho Postgres.
 
@@ -43,8 +45,8 @@ def make_engine(
     return create_async_engine(
         database_url,
         echo=echo,
-        pool_size=POOL_SIZE,
-        max_overflow=MAX_OVERFLOW,
+        pool_size=pool_size,
+        max_overflow=max_overflow,
         pool_pre_ping=True,
         pool_recycle=1800,
         connect_args=connect_args,

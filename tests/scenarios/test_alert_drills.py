@@ -280,41 +280,102 @@ async def test_drill_monitor_loses_the_lake(stack: Stack) -> None:
 # ═══════════════ Chậm: POST /sales, pool cửa hàng, POST /events, trễ đồng bộ ═══════════════
 
 
-async def test_drill_slow_store_database(stack: Stack) -> None:
-    """rs-sales-p95 + rs-db-pool: Postgres của store-002 bị bóp còn 2% một CPU trong khi quầy vẫn
-    bán dồn dập → chốt đơn p95 > 500 ms suốt 10 phút, pool kết nối > 80% suốt 5 phút.
+def _outbox_lock_sql(seconds: float) -> str:
+    """Giữ khóa EXCLUSIVE trên `outbox` của cửa hàng: đọc vẫn qua, mọi GHI phải chờ. Mọi lần chốt
+    đơn và đăng ký khách đều ghi outbox trong cùng transaction (ADR-003) → chúng chờ khóa trong
+    lúc GIỮ kết nối pool. Giống một truy vấn báo cáo/bảo trì dài khóa bảng giữa giờ bán."""
+    return f"BEGIN; LOCK TABLE outbox IN EXCLUSIVE MODE; SELECT pg_sleep({seconds}); COMMIT;"
 
-    Bộ giả lập là vòng hở: request chỉ dồn lại (pool đầy) khi nhịp đến VƯỢT sức DB. Bản đầu (5% CPU,
-    4 đơn/s) đủ trên laptop nhưng runner CI nhanh hơn theo kịp — p95 lượn quanh 500 ms, pool không
-    bao giờ quá 80% (workflow `proof` 2026-09-28). Giờ 2% CPU và 8 đơn/s: quá tải cả trên máy
-    nhanh."""
+
+def _edge_psql(stack: Stack, store: str, sql: str) -> list[str]:
+    e = stack.env
+    db = "edge_" + store.replace("-", "_")
+    return ["docker", "exec", container_of(f"edge-db-{store}"), "psql", "-U",
+            e.get("EDGE_DB_USER", "edge_app"), "-d", db, "-Atc", sql]  # fmt: skip
+
+
+def _release_outbox_lock(stack: Stack, store: str) -> None:
+    subprocess.run(  # noqa: S603
+        _edge_psql(stack, store, "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                   " WHERE query LIKE '%LOCK TABLE outbox%' AND pid <> pg_backend_pid()"),
+        capture_output=True, timeout=60, check=False,
+    )  # fmt: skip
+
+
+# Bản đầu của hai diễn tập dưới bóp CPU Postgres cửa hàng (`docker update --cpus`). Kết quả phụ
+# thuộc tốc độ máy: 5% CPU thì runner CI theo kịp (p95 lượn quanh 500 ms), 2% thì Postgres không mở
+# nổi kết nối overflow mới → pool kẹt ~10/20 = 50% và metric edge-api gần như không có điểm đo
+# (workflow `proof` 2026-09-28 và 2026-10-07: không rule nào kêu trong 30 phút bóp). Khóa bảng
+# cho cùng hiệu ứng "DB chậm với ghi" trên MỌI máy.
+
+
+async def test_drill_store_pool_exhausted(stack: Stack) -> None:
+    """rs-db-pool: `outbox` của store-002 bị khóa liên tục trong khi quầy bán 4 đơn/s → mỗi lần
+    chốt giữ một kết nối chờ khóa, pool (10 + 10 overflow) đầy → > 80% suốt 5 phút."""
     store = "store-002"
-    db = container_of(f"edge-db-{store}")
     run = asyncio.create_task(
         run_edge_plans(
-            stack,
-            "drill-slow-store",
-            {store: sales_plan(duration=16 * 60, sales=16 * 60 * 8, seed=91, start=20, tail=30)},
+            stack, "drill-pool", {store: sales_plan(duration=14 * 60, sales=14 * 60 * 4, seed=91,
+                                                     start=20, tail=30)},
             request_timeout=60,
         )
-    )
-    await asyncio.sleep(15)  # đăng nhập + mở ca khi DB còn nhanh — bóp sau
-    docker("update", "--cpus", "0.02", db)
+    )  # fmt: skip
+    await asyncio.sleep(15)  # đăng nhập + mở ca trước khi khóa
+    holder = subprocess.Popen(  # noqa: S603, ASYNC220
+        _edge_psql(stack, store, _outbox_lock_sql(720)),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )  # fmt: skip
     try:
-        results = [
-            await _expect("rs-db-pool", within=900),
-            await _expect("rs-sales-p95", within=900),
-        ]
+        result = await _expect("rs-db-pool", within=720)
     finally:
-        _unthrottle(db)
+        _release_outbox_lock(stack, store)
+        holder.kill()
     manifest = await run
-    summary = {
-        "results": results,
-        "sales": len(manifest.stores[store].sales),
+    resolved = await wait_alert("rs-db-pool", state="inactive", within=600)
+    report("alerts", "drill-store-pool", {
+        "result": result, "resolved_after_seconds": resolved,
+        "sales": len(manifest.stores[store].sales), "unknown": len(manifest.stores[store].unknown),
         "latency_ms": manifest.stats()["latency_ms"],
-    }
-    report("alerts", "drill-slow-store", summary)
-    _assert_all(results)
+    })  # fmt: skip
+    _assert_all([result])
+
+
+async def test_drill_slow_store_database(stack: Stack) -> None:
+    """rs-sales-p95: `outbox` của store-002 bị khóa từng nhịp (2 s khóa, 1 s nhả) trong khi quầy bán
+    4 đơn/s → mọi lần chốt chờ tới ~2 s, vẫn hoàn tất đều đặn → p95 `POST /sales` > 500 ms suốt
+    10 phút. Nhịp ngắn để pool KHÔNG đầy: đây là "chậm", không phải "nghẽn"."""
+    store = "store-002"
+    run = asyncio.create_task(
+        run_edge_plans(
+            stack, "drill-slow-store", {store: sales_plan(duration=17 * 60, sales=17 * 60 * 4,
+                                                           seed=92, start=20, tail=30)},
+            request_timeout=60,
+        )
+    )  # fmt: skip
+    await asyncio.sleep(15)
+    stop = asyncio.Event()
+
+    async def pulse() -> None:
+        while not stop.is_set():
+            await asyncio.to_thread(
+                subprocess.run, _edge_psql(stack, store, _outbox_lock_sql(2)),
+                capture_output=True, timeout=60, check=False,
+            )  # fmt: skip
+            await asyncio.sleep(1)
+
+    pulser = asyncio.create_task(pulse())
+    try:
+        result = await _expect("rs-sales-p95", within=900)
+    finally:
+        stop.set()
+        await pulser
+        _release_outbox_lock(stack, store)
+    manifest = await run
+    report("alerts", "drill-slow-store", {
+        "result": result, "sales": len(manifest.stores[store].sales),
+        "latency_ms": manifest.stats()["latency_ms"],
+    })  # fmt: skip
+    _assert_all([result])
 
 
 async def test_drill_slow_central_database(stack: Stack) -> None:

@@ -107,6 +107,10 @@ không mất gì — chỉ chậm hơn.
 > hạn thực là N × 10 req/s; seam: đưa bucket sang Redis khi cần chính xác trên nhiều bản. Trần
 > backoff hạ từ 300 xuống **240 giây**: jitter toàn phần nên lần ngủ cuối dài tới đúng trần, và
 > NFR-04 / CH-1 đòi hội tụ < 5 phút sau khi nối lại — 300 giây không còn chỗ cho thời gian xả lô.
+>
+> 🔀 **2026-10-08 — [ADR-011](adr/011-central-api-multi-process.md):** Central API chạy N tiến trình
+> (mặc định 4). `INGEST_MAX_CONCURRENCY` và pool DB là ngân sách TỔNG, chia đều cho N tiến trình;
+> rate limit theo cửa hàng KHÔNG chia (keep-alive gom lô của một cửa hàng về một tiến trình).
 
 ---
 

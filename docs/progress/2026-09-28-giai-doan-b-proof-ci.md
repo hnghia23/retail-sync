@@ -107,24 +107,43 @@ Tăng số worker không phải sửa nhỏ: rate limit theo cửa hàng đang n
   nên không còn partition `point_ledger` → điểm của đơn 31/8 bị từ chối vĩnh viễn → dead-letter. Giờ
   `START` = ngày cuối tháng trước, tính theo hôm nay.
 
-## 5. Trạng thái (2026-10-07)
+## 4b. Lượt chạy thứ hai (2026-10-07, commit `aa42cec`) — 4/6 nhóm xanh
 
-**Code:** commit `051b353` (cục bộ, chờ push) gồm mọi bản sửa ở §4. Đã chạy trên máy: **182/182 test
-tích hợp**, 282 unit test, lint/mypy/import-linter sạch. **Chưa** chạy lại workflow `proof`: các diễn
-tập đã sửa (drift, DB chậm ×2, cửa hàng im lặng, transform) chưa có bằng chứng trên Docker thật.
+**Xanh:** `restore`, `drill-pipeline_and_maintenance_stop`, **`drill-store_offline_70min`** và
+**`drill-transform_stalls`**. Hai bản sửa lỗi hệ thống ở §4 (heartbeat UPSERT, mốc ngày của bộ giám
+sát) được chứng minh trên máy sạch, và **`rs-transform` kêu lần đầu**. Trong nhóm `drills`: drift,
+`rs-horizon`, DB trung tâm chậm (`rs-ingest-p95` + `rs-store-lag` có chủ đích) đều đạt.
+
+**Đỏ:**
+
+| Test | Số đo | Nguyên nhân | Sửa (2026-10-08) |
+|---|---|---|---|
+| `slow_store` (`rs-db-pool`, `rs-sales-p95` không kêu trong 30 phút bóp) | 2% CPU: request chờ 40–70 s, chỉ 497/7.680 đơn xong trong 78 phút. Hai rule chỉ `pending` thoáng qua SAU khi gỡ bóp | Bóp CPU phụ thuộc tốc độ máy: 5% thì runner theo kịp, 2% thì Postgres không mở nổi kết nối overflow → pool kẹt ~10/20 | Thay bằng **khóa bảng `outbox`** (hiệu ứng như nhau trên mọi máy). Tách hai diễn tập: `store_pool_exhausted` (khóa liên tục → pool đầy) và `slow_store_database` (khóa từng nhịp 2 s / nhả 1 s → p95 ~2 s, pool không đầy) |
+| `otel_overhead` | `sampled` lần 1: p50 13,4 ms, lần 2: 8,8 ms → lệch 106% | Container vừa dựng lại chưa "ấm", `sleep(10)` không đủ | Mỗi lần đo có một lượt bán khởi động 45 s, không tính số |
+| `ld2` | p95 1,08 s ở 127 sự kiện/giây | **central-api chạm 100% MỘT nhân**, central-db chỉ 13–26% (bảng ở [ADR-011](../adr/011-central-api-multi-process.md)) | Chủ dự án chọn **nhiều tiến trình** → ADR-011: `--workers 4`, semaphore + pool chia theo tiến trình, metric có `service.instance.id` |
+
+Số đo overhead OTel (đã ấm, lần đo tốt): trace 100% → p95 +116%, CPU edge-api 7,9 → 12,7%. Trace 10% →
+p95 ~+27%, CPU ~10,3%. Cả hai đều vượt mức 5% của ADR-009. Phần còn lại ở 10% là metric +
+instrumentation, không tắt được (observability là Must). Vẫn còn chờ quyết định tỉ lệ lấy mẫu.
+
+## 5. Trạng thái (2026-10-08)
+
+**Code:** commit sau `aa42cec` (cục bộ, chờ push): diễn tập khóa bảng, khởi động ấm cho đo OTel, và
+**ADR-011 Central API nhiều tiến trình**. Đã chạy: 286 unit test, lint/mypy/import-linter sạch. **Chưa
+chạy trên Docker:** compose `central-api --workers 4` sẽ được job `scenarios` của CI kiểm khi push.
 
 **Cổng B** ([06](../06-roadmap.md)):
 
 | Điều kiện | Trạng thái |
 |---|---|
 | CH-1…CH-7 | ✅ (2026-09-25, máy dev) |
-| Cảnh báo đã kích hoạt thử | 🟡 **19/21** — còn `rs-db-pool`, `rs-transform` (diễn tập đã sửa, chờ chạy) |
+| Cảnh báo đã kích hoạt thử | 🟡 **20/21** — còn `rs-db-pool` (diễn tập khóa bảng mới, chờ chạy) |
 | Partition tháng sau tự tồn tại | ✅ |
-| Backup + `restore` thật | ✅ (workflow `proof`) |
+| Backup + `restore` thật | ✅ (workflow `proof`, 2 lượt) |
 | LD-1 | ✅ p95 chốt đơn 22 ms, bộ giả lập 1% CPU |
 | LD-4 / 200 kết nối | ✅ chỉ `200`/`503` có `Retry-After`, 0 lỗi |
-| **LD-2** | 🔴 p95 > 1 s từ ~164 sự kiện/giây — **chờ quyết định** (§6 bước 3) |
-| **Overhead OTel** | 🔴 +146% p95 với trace 100% — **chờ quyết định** (§6 bước 3) |
+| **LD-2** | 🔴 p95 1,08 s ở 127 sự kiện/giây, nghẽn một nhân → ADR-011, **chờ đo lại** |
+| **Overhead OTel** | 🔴 trace 100% +116%, trace 10% ~+27% — **chờ quyết định tỉ lệ lấy mẫu** |
 | LD-3, seam 50 triệu dòng ledger | ⏳ cần máy chạy liên tục |
 | DI-1…DI-5 | ⏳ DI-1…3 có trong job `scenarios`; DI-4/5 chưa rà |
 | Test ngâm 72h | ⏳ chạy cuối cùng |
@@ -136,27 +155,19 @@ tập đã sửa (drift, DB chậm ×2, cửa hàng im lặng, transform) chưa 
 `unit`, `integration`, `scenarios`. Nếu đỏ: dán khoảng 80 dòng cuối của bước đỏ (từ `FAILURES` / `short
 test summary info`). Hoặc cài `gh` (`winget install GitHub.cli` → `gh auth login`) để Claude tự đọc log.
 
-**Bước 2 — chạy lại `proof`** (~4 giờ, không tốn máy cá nhân). Actions → **proof (giai đoạn B)** → Run
-workflow → `main`, suite `all`, `-k` để trống. Chờ xong thì tải 6 artifact `proof-*` và giải nén vào
-`runs/proof-ci/<tên-artifact>/` (xóa thư mục lượt cũ trước), rồi báo Claude đọc. Kỳ vọng:
-- `drills`, ba `drill-*`, `restore` xanh → **21/21 cảnh báo** đã kích hoạt thử.
-- `load` vẫn đỏ vì LD-2 — đúng, chờ bước 3. Lượt này có thêm CPU central-api/central-db từng bậc LD-2 và
-  số đo chế độ trace 10%.
-- Chạy lại riêng một test: điền `-k` (ví dụ `slow_store`) và chọn đúng suite.
+**Bước 2 — chạy lại `proof`, chỉ hai nhóm đỏ** (~2,5 giờ). Actions → **proof (giai đoạn B)** → Run
+workflow → `main`, suite **`drills`**, rồi chạy lần nữa với suite **`load`** (hai lượt song song được).
+Chỉ cần chạy lại riêng một test thì điền `-k` (ví dụ `pool_exhausted`). Xong thì tải artifact về
+`runs/proof-ci/<tên-artifact>/` (xóa lượt cũ trước) và báo Claude đọc. Kỳ vọng:
+- `drills` xanh → **21/21 cảnh báo** đã kích hoạt thử.
+- `load`: overhead OTel đo lặp lại được (test xanh). LD-2 với 4 tiến trình: xem CPU central-api có còn
+  chạm trần không. Còn > 1 s mà CPU central-api KHÔNG chạm trần → nút thắt đã dời (DB, lock), đo tiếp.
 - Artifact giữ 30 ngày.
 
-**Bước 3 — chủ dự án quyết hai việc**, dựa trên số của bước 2:
-1. **Tỉ lệ lấy mẫu trace** (ADR-009: overhead > 5% → giảm). Nếu trace 10% đưa overhead về gần 5%, đặt
-   `OTEL_TRACES_SAMPLER=parentbased_traceidratio`, `OTEL_TRACES_SAMPLER_ARG=0.1` trong compose cho edge-api
-   (và central-api), ghi changelog ADR-009.
-2. **LD-2.** Đọc CPU từng bậc:
-   - **central-api ~100% (một nhân)**: nghẽn ở một tiến trình Python. Lựa chọn: giảm trace (thường gỡ
-     được phần lớn), hoặc nhiều worker uvicorn. Nhiều worker kéo theo rate limit theo cửa hàng phải rời
-     bộ nhớ tiến trình (Redis) → cần ADR.
-   - **central-db cao**: tối ưu ingest (gom câu lệnh theo lô), xem `pg_stat_statements`.
-   - **Cả hai đều thấp**: runner bị chia nhân cho ~30 container. Cần đo lại trên máy có trung tâm riêng
-     (VPS) trước khi kết luận.
-   - Quyết định nào cũng ghi số vào docs/02 §6 và changelog docs/16 §4.
+**Bước 3 — chủ dự án quyết tỉ lệ lấy mẫu trace** (ADR-009: overhead > 5% → giảm). Số hiện có: 100% →
++116% p95, 10% → ~+27% (phần còn lại là metric, không tắt được). Đặt bằng
+`OTEL_TRACES_SAMPLER=parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG` trong compose và ghi
+changelog ADR-009. Mức 5% của ADR-009 có thể phải sửa thành con số đo được, vì metric luôn tốn phí.
 
 **Bước 4 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
 được (> 6 giờ hoặc > 14 GB đĩa):

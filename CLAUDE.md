@@ -22,8 +22,8 @@ partition + INV-4, dọn outbox, log JSON, 15 cảnh báo, backup cửa hàng
 muốn **xong B rồi mới chạy test ngâm 72h**, và **không muốn máy cá nhân chạy nhiều giờ** → diễn tập,
 LD-1/2/4, `restore` thật chạy bằng **workflow `proof`** trên GitHub Actions (bấm tay, mỗi nhóm một runner,
 ≤ 6 giờ — [nhật ký](docs/progress/2026-09-28-giai-doan-b-proof-ci.md), **đọc §5 trạng thái + §6 các bước
-tiếp theo**). 2026-10-07: cảnh báo 19/21, `restore` thật ✅, LD-1/LD-4 ✅; **LD-2 và overhead OTel 🔴 chờ chủ dự
-án quyết**. Còn cần máy chạy liên tục: LD-3, seam 50 triệu dòng ledger, test ngâm.
+tiếp theo**). 2026-10-08: cảnh báo 20/21, `restore` thật ✅, LD-1/LD-4 ✅; **LD-2 nghẽn một nhân → ADR-011
+(chờ đo lại)**, overhead OTel 🔴 chờ quyết định tỉ lệ lấy mẫu. Còn cần máy chạy liên tục: LD-3, seam 50 triệu dòng ledger, test ngâm.
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 
@@ -100,7 +100,8 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
 - **Giai đoạn B (2026-09-25), đừng làm hỏng:** (1) lô RỖNG `POST /events` là **heartbeat** — worker
   rảnh gửi mỗi 5 phút, trung tâm đặt `updated_at` và `lag_seconds = 0` (outbox trống = đã bắt kịp).
   (2) Rate limit theo cửa hàng `429` (token bucket, trong bộ nhớ một tiến trình) kiểm TRƯỚC semaphore
-  `503`. (3) Trần backoff 240 s để CH-1 hội tụ < 5 phút. (4) dbt: fact đọc thẳng bronze, O(tháng)
+  `503`. Central API chạy N tiến trình (ADR-011): `--workers` và `CENTRAL_API_WORKERS` PHẢI cùng số;
+  thứ gì theo tiến trình mà chạm Postgres thì chia qua `worker_budget()`, metric cần `service.instance.id`. (3) Trần backoff 240 s để CH-1 hội tụ < 5 phút. (4) dbt: fact đọc thẳng bronze, O(tháng)
   (quy tắc ở [data_platform/README.md](data_platform/README.md)). (5) Bộ giả lập: `5xx` ở chốt đơn =
   "không rõ kết cục". (6) `simulator bulk` ghi prefix `bronze/bulk-<profile>` + DB `dw_bulk`, KHÔNG BAO
   GIỜ `bronze/central`. (7) Test hỗn loạn/diễn tập/tải OPT-IN (`RETAIL_SYNC_CHAOS|ALERT_DRILLS|LOAD=1`),
@@ -176,6 +177,7 @@ Hệ quả khi ra quyết định:
 | **HTMX + Alpine.js** cho UI, **không** redeem điểm v1, **không** multi-tenant | [008](docs/adr/008-remaining-decisions.md) |
 | **OpenTelemetry + `grafana/otel-lgtm`** (compose profile riêng) để săn bottleneck | [009](docs/adr/009-observability-stack.md) |
 | **Luồng dữ liệu trước, tính năng sau** — bộ giả lập thay UI, test tải bằng bộ giả lập (không `k6`), silver = staging dbt | [010](docs/adr/010-data-flow-first.md) |
+| **Central API nhiều tiến trình** (`CENTRAL_API_WORKERS`, mặc định 4) — semaphore + pool chia theo tiến trình, rate limit không chia | [011](docs/adr/011-central-api-multi-process.md) |
 
 ✅ **Stack đã chốt 2026-09-11** — [docs/07-stack-decision.md](docs/07-stack-decision.md).
 

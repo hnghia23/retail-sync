@@ -70,6 +70,7 @@ khi muốn đảo ngược một quyết định.
 | [008](adr/008-remaining-decisions.md) | **Chốt các quyết định còn lại** — DB cửa hàng, UI, dbt, redeem, multi-tenant |
 | [009](adr/009-observability-stack.md) | **OpenTelemetry + `grafana/otel-lgtm`** để săn bottleneck |
 | [010](adr/010-data-flow-first.md) | **Luồng dữ liệu trước, tính năng sau** — bộ giả lập thay UI, giai đoạn A/B/C |
+| [011](adr/011-central-api-multi-process.md) | **Central API nhiều tiến trình** — gỡ trần một nhân (LD-2); ngân sách Postgres chia theo tiến trình |
 
 > **✅ Stack đã chốt (2026-09-11)** — [07-stack-decision.md](07-stack-decision.md).
 >

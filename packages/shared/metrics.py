@@ -42,6 +42,22 @@ if TYPE_CHECKING:
 _metrics_initialized = False
 
 
+def resource_attributes(service_name: str) -> dict[str, str]:
+    """Thuộc tính resource OTel của TIẾN TRÌNH này.
+
+    `service.instance.id` = host + pid: Central API chạy nhiều tiến trình uvicorn cùng
+    `service.name` (ADR-011). Thiếu nó, Prometheus của `otel-lgtm` gộp metric của N tiến trình vào
+    MỘT series (`instance` rỗng): counter nhảy lùi mỗi lần tiến trình khác đẩy, gauge chỉ còn
+    giá trị của tiến trình đẩy sau cùng. Truy vấn của dashboard/cảnh báo đều gộp (`sum`/`max`)
+    nên thêm nhãn này không đổi kết quả của chúng."""
+    import socket
+
+    return {
+        "service.name": service_name,
+        "service.instance.id": f"{socket.gethostname()}-{os.getpid()}",
+    }
+
+
 def setup_metrics(service_name: str, *, settings: OtelSettings | None = None) -> None:
     """Gắn MeterProvider cho tiến trình. No-op nếu chưa cấu hình OTLP endpoint.
 
@@ -68,7 +84,7 @@ def setup_metrics(service_name: str, *, settings: OtelSettings | None = None) ->
         OTLPMetricExporter(endpoint=f"{cfg.otel_exporter_otlp_endpoint}/v1/metrics")
     )
     provider = MeterProvider(
-        resource=Resource.create({"service.name": service_name}), metric_readers=[reader]
+        resource=Resource.create(resource_attributes(service_name)), metric_readers=[reader]
     )
     metrics.set_meter_provider(provider)
     _metrics_initialized = True
@@ -80,11 +96,13 @@ def register_resource_gauges(
     engine: AsyncEngine,
     attrs: Mapping[str, str],
     disk_path: str | None = None,
+    pool_capacity: int | None = None,
 ) -> None:
     """Hai chỉ số tài nguyên của docs/08 §5, đọc ngay lúc export (rẻ, không chạm DB):
 
-    - `db_pool_used_ratio` — kết nối pool đang cho mượn / (pool_size + max_overflow). Ngưỡng 80%:
-      request tiếp theo sẽ phải CHỜ kết nối, độ trễ tăng trước khi có lỗi nào.
+    - `db_pool_used_ratio` — kết nối pool đang cho mượn / (pool_size + max_overflow) của CHÍNH
+      engine này (`pool_capacity`; Central API nhiều tiến trình có pool nhỏ hơn, ADR-011).
+      Ngưỡng 80%: request tiếp theo sẽ phải CHỜ kết nối, độ trễ tăng trước khi có lỗi nào.
     - `disk_used_ratio` (khi có `disk_path`) — đĩa của máy cửa hàng. Ngưỡng 75%: "đầy đĩa" là
       rủi ro chí tử ở cửa hàng (docs/08 §3.1), và cảnh báo phải tới TRƯỚC lần ghi đầu tiên lỗi
       (CH-4). Đo đường dẫn nằm trên cùng đĩa với dữ liệu Postgres cửa hàng.
@@ -97,10 +115,11 @@ def register_resource_gauges(
 
     labels = dict(attrs)
     pool = engine.sync_engine.pool
+    capacity = pool_capacity or (POOL_SIZE + MAX_OVERFLOW)
 
     def pool_used(_options: Any) -> list[Observation]:
         checked_out = pool.checkedout() if hasattr(pool, "checkedout") else 0
-        return [Observation(checked_out / (POOL_SIZE + MAX_OVERFLOW), labels)]
+        return [Observation(checked_out / capacity, labels)]
 
     meter.create_observable_gauge(
         "db_pool_used_ratio",

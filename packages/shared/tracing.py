@@ -49,7 +49,9 @@ def setup_tracing(service_name: str, *, settings: OtelSettings | None = None) ->
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-    resource = Resource.create({"service.name": service_name})
+    from shared.metrics import resource_attributes
+
+    resource = Resource.create(resource_attributes(service_name))
     provider = TracerProvider(resource=resource)
     provider.add_span_processor(
         BatchSpanProcessor(

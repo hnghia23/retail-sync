@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.config import OtelSettings, ReturnRules
+from shared.db import MAX_OVERFLOW, POOL_SIZE
 
 
 class CentralSettings(BaseSettings):
@@ -51,7 +54,43 @@ class CentralSettings(BaseSettings):
     # mất cỡ giây — 60 giây là dư hơn một bậc độ lớn. 0 = tắt.
     db_transaction_timeout_seconds: int = 60
 
+    # Số tiến trình uvicorn của Central API (ADR-011). PHẢI bằng `--workers` của lệnh chạy
+    # (compose đọc cùng biến `CENTRAL_API_WORKERS`): mỗi tiến trình tự chia phần ngân sách TỔNG ở
+    # trên theo số này (`worker_budget()`). 1 = như trước ADR-011.
+    central_api_workers: int = 1
+
     debug: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerBudget:
+    """Phần ngân sách của MỘT tiến trình Central API (ADR-011)."""
+
+    ingest_concurrency: int
+    store_rate_per_second: float
+    store_burst: int
+    pool_size: int
+    max_overflow: int
+
+
+def worker_budget(settings: CentralSettings) -> WorkerBudget:
+    """Chia ngân sách TỔNG cho `central_api_workers` tiến trình.
+
+    - Semaphore `503` và pool DB bảo vệ POSTGRES → chia cho N, để N tiến trình không mở N lần
+      số kết nối (`max_connections` = 100 là trần chung của mọi tiến trình đọc DB, LD-4).
+    - Rate limit theo cửa hàng (`429`) KHÔNG chia: sync worker giữ kết nối keep-alive nên mọi lô
+      của một cửa hàng thường rơi vào CÙNG một tiến trình. Chia cho N thì cửa hàng chỉ còn 1/N
+      hạn mức; không chia thì trần thực là N × rate khi lô rải đều — đúng điều
+      `central.ingest.ratelimit` đã chấp nhận (mục tiêu là chia lượt, không phải hạn ngạch).
+    """
+    n = max(1, settings.central_api_workers)
+    return WorkerBudget(
+        ingest_concurrency=max(1, math.ceil(settings.ingest_max_concurrency / n)),
+        store_rate_per_second=settings.ingest_store_rate_per_second,
+        store_burst=settings.ingest_store_burst,
+        pool_size=max(2, math.ceil(POOL_SIZE / n)),
+        max_overflow=max(2, math.ceil(MAX_OVERFLOW / n)),
+    )
 
 
 @lru_cache
