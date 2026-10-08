@@ -107,7 +107,7 @@ giả lập + một ngưỡng**. `test_load.py` chạy lệnh đó rồi đọc 
 | # | Lệnh (rút gọn) | Đạt khi |
 |---|---|---|
 | LD-1 | `run --mode edge --stores 1 --rate x50` | p95 `POST /sales` < 500 ms, bộ giả lập < 50% CPU |
-| LD-2 | `run --mode virtual` 10 → 50 → 100 → 200 cửa hàng, nhịp ×180 (một ngày 15 giờ trong 5 phút; ×10 của bản nháp chỉ ~16 sự kiện/giây — xa dưới tải thiết kế ~260/giây của [02 §1](02-scale-capacity.md)). Mỗi bậc ghi sự kiện/giây + CPU trung tâm | p95 `POST /events` < 1 s, 503 có `Retry-After`, `audit` hội tụ |
+| LD-2 | `run --mode virtual` 10 → 50 → 95 → 200 cửa hàng, nhịp ×180 (một ngày 15 giờ trong 5 phút; ×10 của bản nháp chỉ ~16 sự kiện/giây). Một cửa hàng ảo T2 đặt vào ~2,72 sự kiện/giây → 95 ≈ tải thiết kế ~260/giây ([02 §1](02-scale-capacity.md)), 200 ≈ 2×. Mỗi bậc ghi tải đặt vào + CPU trung tâm | **Tới tải thiết kế:** p95 `POST /events` < 1 s. **Vượt tải thiết kế:** không đòi p95; mọi lỗi phía client là `429`/`503` có `Retry-After` (chủ dự án chốt 2026-10-08). **Mọi bậc:** `audit` hội tụ, 0 mất, bộ giả lập < 50% CPU |
 | LD-3 | `bulk --profile t2 --months 24` rồi bộ truy vấn lớp C | Mỗi truy vấn < 3 s |
 | LD-4 | `run --mode virtual --stores 200 --connections 200` | Không lỗi, hoặc 503 tử tế |
 
@@ -157,6 +157,8 @@ riêng: `uv run python infra/bootstrap.py --project retail-sync-ci --env-file ru
 stack dev — dừng stack dev trước).
 
 ---
+*Changelog: 2026-10-08 — §4 LD-2 hai vùng tiêu chí (tới / vượt tải thiết kế), bậc 95 = tải thiết kế.*
+
 *Changelog: 2026-09-28 (lần 2) — §4 LD-2 theo nhịp thật của test (×180, không phải ×10) và quy ra sự kiện/giây.*
 
 *Changelog: 2026-09-28 — §6: workflow `proof` (diễn tập cảnh báo, tải, khôi phục, hỗn loạn trên runner dùng một lần).*

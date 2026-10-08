@@ -1,8 +1,0 @@
-# Đo overhead OpenTelemetry khi GIẢM lấy mẫu trace (ADR-009: overhead > 5% → giảm tỉ lệ lấy mẫu).
-# edge-api-store-001 giữ metric + instrumentation, nhưng chỉ 10% trace được ghi (SDK đọc thẳng hai
-# biến chuẩn OTel này). Dùng bởi tests/scenarios/test_load.py::test_otel_overhead (tự bật lại khi xong).
-services:
-  edge-api-store-001:
-    environment:
-      OTEL_TRACES_SAMPLER: parentbased_traceidratio
-      OTEL_TRACES_SAMPLER_ARG: "0.1"

@@ -55,6 +55,14 @@ pytestmark = pytest.mark.skipif(
 #: `--rate x50`) → 2,6 đơn/giây. Mỗi đơn là 2–3 request (tạm tính, [đăng ký khách], chốt).
 LD1_SALES_PER_SECOND = 800 * 0.35 / 3 * 2 * 50 / 3600
 LD2_KEYS = ROOT / "runs" / "virtual-keys-ld2.env"
+#: Tải thiết kế của test tải — docs/02 §1: T3 (2000 cửa hàng), giờ cao điểm 35%, ×2 lễ Tết ≈ 260
+#: lượt ghi/giây; ở đây đếm bằng sự kiện đồng bộ tới trung tâm.
+DESIGN_EVENTS_PER_SECOND = 260.0
+#: Mỗi bậc LD-2 nén một ngày mở cửa 15 giờ vào 5 phút (nhịp ×180).
+LD2_STEP_SECONDS = 300
+#: (số cửa hàng ảo, vùng). Một cửa hàng ảo T2 ở nhịp ×180 đặt vào ~2,72 sự kiện/giây (workflow
+#: `proof` 2026-10-08), nên 95 cửa hàng ≈ tải thiết kế, 200 ≈ 2× tải thiết kế.
+LD2_STEPS = ((10, "design"), (50, "design"), (95, "design"), (200, "overload"))
 
 
 def _stats(manifest: Manifest) -> dict[str, Any]:
@@ -122,13 +130,13 @@ async def test_ld1_one_store_peak_hour(stack: Stack) -> None:
     assert settled.status == CONVERGED, settled.findings[:5]
 
 
-#: Chế độ đo overhead → file override (None = cấu hình compose thường: trace 100% + metric).
-OTEL_MODES = {"on": None, "off": "otel-off.compose.yaml", "sampled": "otel-sampled.compose.yaml"}
+#: Chế độ đo overhead → file override (None = cấu hình thường: trace 10% + metric, ADR-009).
+OTEL_MODES = {"on": None, "off": "otel-off.compose.yaml", "full": "otel-full.compose.yaml"}
 
 
 def _edge_api(mode: str) -> None:
-    """Dựng lại edge-api-store-001 ở một chế độ OTel: `on` (trace 100%), `off` (endpoint rỗng =
-    tắt hẳn SDK), `sampled` (trace 10%, metric giữ nguyên)."""
+    """Dựng lại edge-api-store-001 ở một chế độ OTel: `on` (cấu hình thường: trace 10%), `off`
+    (endpoint rỗng = tắt hẳn SDK), `full` (trace 100%, metric giữ nguyên)."""
     files = ["-f", str(ROOT / "infra" / "compose.yaml")]
     if (override := OTEL_MODES[mode]) is not None:
         files += ["-f", str(ROOT / "infra" / "chaos" / override)]
@@ -147,12 +155,12 @@ async def _sample_cpu(name: str, into: list[float]) -> None:
 
 
 async def test_otel_overhead(stack: Stack) -> None:
-    """ADR-009: overhead của instrumentation trên chốt đơn, ở hai mức: `on` (trace 100% + metric,
-    cấu hình hiện tại) và `sampled` (trace 10%), so với `off`. Chạy xen kẽ hai vòng cùng một lịch
+    """ADR-009: overhead của instrumentation trên chốt đơn, ở hai mức: `on` (cấu hình thường —
+    trace 10% + metric) và `full` (trace 100%), so với `off`. Chạy xen kẽ hai vòng cùng một lịch
     (10 đơn/s, 3 phút) để trôi nền của máy không đổ lên một bên.
 
-    Điều kiện ADR-009 (tăng ≤ 5%) được GHI, không chặn: vượt là quyết định giảm lấy mẫu, cần người
-    — và `sampled` cho sẵn con số để quyết. Test chỉ chặn khi PHÉP ĐO không đáng tin: hai lần chạy
+    Overhead được GHI, không chặn (mức chấp nhận ở ADR-009 là số đo, không phải ngưỡng đỏ/xanh).
+    Test chỉ chặn khi PHÉP ĐO không đáng tin: hai lần chạy
     cùng chế độ lệch nhau quá 30% ở p95. (Bản đầu chặn "overhead p95 < 50%" như một phép kiểm "bất
     thường"; runner CI đo +146% — 11 → 28 ms — lặp lại y hệt ở cả hai lần: đó là SỐ ĐO, không phải
     phép đo hỏng, workflow `proof` 2026-09-28.)"""
@@ -160,12 +168,12 @@ async def test_otel_overhead(stack: Stack) -> None:
     url = EDGE[store][0]
     runs: dict[str, list[dict[str, Any]]] = {mode: [] for mode in OTEL_MODES}
     try:
-        for i, mode in enumerate(("on", "off", "sampled", "on", "off", "sampled")):
+        for i, mode in enumerate(("on", "off", "full", "on", "off", "full")):
             await asyncio.to_thread(_edge_api, mode)
             await wait_up(url, within=120)
             # Khởi động bằng TẢI THẬT, không tính số: pool kết nối, prepared statement của asyncpg,
             # cache sản phẩm, exporter OTel. Bản đầu chỉ ngủ 10 s → lần đo đầu sau mỗi lần dựng lại
-            # chậm hẳn (`sampled` lần 1: p50 13,4 ms, lần 2: 8,8 ms — workflow `proof` 2026-10-07).
+            # chậm hẳn (trace 10% lần 1: p50 13,4 ms, lần 2: 8,8 ms — workflow `proof` 2026-10-07).
             await run_edge_plans(
                 stack, f"otel-warmup-{mode}-{i}",
                 {store: sales_plan(duration=45, sales=400, seed=30 + i, tail=5)},
@@ -198,7 +206,7 @@ async def test_otel_overhead(stack: Stack) -> None:
 
     overhead = {
         mode: {q: round(mean(mode, q) / mean("off", q) - 1, 4) for q in ("p50", "p95")}
-        for mode in ("on", "sampled")
+        for mode in ("on", "full")
     }
     spread = {
         mode: round(abs(p95s[0] - p95s[1]) / min(p95s), 4)
@@ -208,7 +216,8 @@ async def test_otel_overhead(stack: Stack) -> None:
     result = {
         "runs": runs,
         "latency_overhead": overhead,
-        "adr009_within_5pct": {m: o["p95"] <= 0.05 for m, o in overhead.items()},
+        # ADR-009 ghi overhead bằng số tuyệt đối: +x ms trên ngân sách 500 ms của chốt đơn.
+        "p95_added_ms": {m: round(mean(m, "p95") - mean("off", "p95"), 1) for m in overhead},
         "edge_api_cpu_pct_mean": {mode: cpu_of(mode) for mode in OTEL_MODES},
         "p95_spread_between_repeats": spread,
     }
@@ -276,22 +285,26 @@ def _client_latency(manifest: Manifest) -> dict[str, Any]:
 
 
 async def test_ld2_virtual_stores_10_to_200(stack: Stack) -> None:
-    """LD-2: 10 → 50 → 100 → 200 cửa hàng ảo (T2) cùng đẩy đồng bộ, mỗi bậc ~5 phút. Đạt: trung
-    tâm giữ p95 `POST /events` < 1 s (phía server) ở mọi bậc — hoặc từ chối tử tế (503/429 có
-    `Retry-After`) chứ không lỗi; mọi sự kiện tới đủ (`CONVERGED`); bộ giả lập < 50% CPU.
+    """LD-2: 10 → 50 → 95 → 200 cửa hàng ảo (T2) cùng đẩy đồng bộ, mỗi bậc ~5 phút. Hai vùng
+    (chủ dự án chốt 2026-10-08, docs/16 §4):
 
-    Nhịp ×180 (một ngày mở cửa 15 giờ trong 5 phút), KHÔNG phải ×10 như bản nháp ở docs/16 §4:
-    ×10 với 200 cửa hàng chỉ ~16 sự kiện/giây, xa dưới tải thiết kế. Mỗi bậc ghi `events_per_second`
-    để so với ~260 lượt ghi/giây của docs/02 §1, và CPU của central-api/central-db để biết nghẽn ở
-    đâu khi p95 vượt ngưỡng."""
+    - **Tới tải thiết kế** (≤ ~260 sự kiện/giây, docs/02 §1): p95 `POST /events` phía server < 1 s.
+    - **Vượt tải thiết kế** (bậc 200 ≈ 2×): KHÔNG đòi p95 — trung tâm phải từ chối tử tế (mọi lỗi
+      phía client là một lần `429`/`503` có `Retry-After`), không mất gì. p95 ghi lại làm điểm gãy.
+
+    Mọi bậc: mọi sự kiện tới đủ (`CONVERGED`, 0 pending, 0 dead), bộ giả lập < 50% CPU.
+
+    Nhịp ×180 (một ngày mở cửa 15 giờ trong 5 phút), KHÔNG phải ×10 như bản nháp đầu của docs/16:
+    ×10 với 200 cửa hàng chỉ ~16 sự kiện/giây. Mỗi bậc ghi tải ĐẶT VÀO (sự kiện / 300 s, không phụ
+    thuộc trung tâm từ chối bao nhiêu) và CPU central-api/central-db để biết nghẽn ở đâu."""
     lines = await asyncio.to_thread(_ensure_ld2_keys, stack, 200)
     rate = 15 * 3600 / 300  # một ngày mở cửa (15 giờ) trong 5 phút
     steps: dict[str, Any] = {}
-    for stores in (10, 50, 100, 200):
+    for stores, zone in LD2_STEPS:
         refused0 = prom("sum(ingest_batches_refused_total) or vector(0)") or 0.0
         t0 = time.time()
-        # CPU của trung tâm trong suốt bậc: `central-api` là MỘT tiến trình uvicorn (rate limit
-        # trong bộ nhớ một tiến trình), nên chạm ~100% = nghẽn một nhân, không phải DB.
+        # CPU của trung tâm trong suốt bậc (`docker stats`, 100% = một nhân). Trước ADR-011
+        # central-api là MỘT tiến trình: chạm ~100% là nghẽn một nhân, không phải DB.
         cpu: dict[str, list[float]] = {"central-api": [], "central-db": []}
         samplers = [asyncio.create_task(_sample_cpu(container_of(s), v)) for s, v in cpu.items()]
         try:
@@ -333,6 +346,9 @@ async def test_ld2_virtual_stores_10_to_200(stack: Stack) -> None:
             # Quy đổi ra tải thật: docs/02 §1 thiết kế test tải theo ~260 lượt ghi/giây (T3 2000
             # cửa hàng, giờ cao điểm 35%, ×2 lễ Tết). "N cửa hàng ảo" ở nhịp nén ×180 KHÔNG phải N
             # cửa hàng thật.
+            "zone": zone,
+            "offered_events_per_second": round(total("sent") / LD2_STEP_SECONDS, 1),
+            "x_design": round(total("sent") / LD2_STEP_SECONDS / DESIGN_EVENTS_PER_SECOND, 2),
             "events_per_second": round(total("sent") / elapsed, 1) if elapsed else None,
             "cpu_pct_mean_max": {
                 s: [round(sum(v) / len(v), 1), round(max(v), 1)] if v else None
@@ -355,7 +371,21 @@ async def test_ld2_virtual_stores_10_to_200(stack: Stack) -> None:
         assert all(s == CONVERGED for s in step["audit"]), label
         assert all(c is not None and c < 0.5 for c in step["simulator_cpu_share"]), label
         p95 = step["server_p50_p95_p99_s"]["0.95"]
-        assert p95 is not None and p95 < 1.0, f"{label} cửa hàng: p95 {p95}s"
+        assert p95 is not None, label
+        if step["zone"] == "design":
+            # Bậc "thiết kế" phải thật sự ở quanh tải thiết kế — bộ sinh đổi nhịp thì đỏ ở đây,
+            # thay vì âm thầm đo tải khác.
+            assert step["x_design"] <= 1.1, (
+                f"{label}: tải đặt vào {step['x_design']} lần tải thiết kế"
+            )
+            assert p95 < 1.0, f"{label} cửa hàng ({step['x_design']} lần tải thiết kế): p95 {p95}s"
+        else:
+            assert step["x_design"] >= 1.5, (
+                f"{label}: bậc quá tải chỉ {step['x_design']} lần tải thiết kế"
+            )
+            # Từ chối tử tế: mọi lỗi phía client là một lần trung tâm từ chối (`429`/`503`, router
+            # luôn gắn `Retry-After` — LD-4 kiểm header), không phải `500` hay đứt kết nối.
+            assert step["transport_errors"] <= step["refused_batches"], label
 
 
 # ═══════════════════════════════ LD-4 ═══════════════════════════════

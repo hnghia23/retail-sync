@@ -107,7 +107,10 @@ class OtelSettings(_EnvSettings):
     otel_exporter_otlp_endpoint: str | None = None
     otel_resource_attributes: str = ""
     otel_traces_sampler: str = "parentbased_traceidratio"
-    otel_traces_sampler_arg: float = 1.0
+    # 10% trace (ADR-009, 2026-10-08): trace 100% làm p95 chốt đơn 12,9 → 33,1 ms và CPU edge-api
+    # 8,8 → 14,8%; 10% còn 16,4 ms / 11,8% (workflow `proof`). Phần còn lại là metric, không tắt.
+    # Đặt `OTEL_TRACES_SAMPLER_ARG=1.0` khi cần trace đủ để điều tra một sự cố.
+    otel_traces_sampler_arg: float = 0.1
 
     @property
     def enabled(self) -> bool:

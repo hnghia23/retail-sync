@@ -1,0 +1,8 @@
+# Đo overhead OpenTelemetry khi lấy mẫu 100% trace (ADR-009). Mặc định là 10% (`OtelSettings`); file
+# này đặt edge-api-store-001 về 100% để so. Dùng bởi tests/scenarios/test_load.py::test_otel_overhead
+# (tự dựng lại cấu hình thường khi xong).
+services:
+  edge-api-store-001:
+    environment:
+      OTEL_TRACES_SAMPLER: parentbased_traceidratio
+      OTEL_TRACES_SAMPLER_ARG: "1.0"

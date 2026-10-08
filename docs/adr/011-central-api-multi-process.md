@@ -1,6 +1,6 @@
 # ADR-011 — Central API chạy nhiều tiến trình
 
-- **Trạng thái:** ✅ Chấp nhận (2026-10-08). **Chưa kiểm bằng số đo:** chờ lượt chạy lại LD-2
+- **Trạng thái:** ✅ Chấp nhận (2026-10-08), ✅ **đã đo** (workflow `proof` 2026-10-08, §Kết quả đo)
 - **Người quyết định:** chủ dự án
 - **Liên quan:** [08-reliability-and-scale §3.2](../08-reliability-and-scale.md) (backpressure),
   [02-scale-capacity](../02-scale-capacity.md), [ADR-003](003-outbox-not-kafka.md) (Outbox + HTTP),
@@ -71,5 +71,21 @@ Mọi thứ giả định "một tiến trình" được xử lý tường minh 
   chạm trần → nút thắt đã dời sang chỗ khác (DB, lock), cần đo lại. Hoặc khi chạy nhiều máy
   Central API → phương án 2.
 
+## Kết quả đo (workflow `proof`, 2026-10-08, cùng runner)
+
+| Tải đặt vào (sự kiện/giây) | p95 — 1 tiến trình | p95 — 4 tiến trình | CPU central-api (đỉnh) |
+|---|---|---|---|
+| ~136 | 1,08 s | **0,16 s** | 102% → 131% |
+| ~273 (≈ thiết kế) | 1,69 s | **0,99 s** | 102% → 255% |
+| ~543 (2× thiết kế) | 1,68 s | 1,56 s | 103% → 267% |
+
+Ở 2× tải thiết kế, runner 4 nhân hết CPU cho cả stack (central-api 2,7 nhân + Postgres 1 nhân). Theo
+tiêu chí LD-2 hai vùng (docs/16 §4), bậc đó chỉ đòi từ chối tử tế + không mất dữ liệu, và đạt.
+`rs-db-pool` (pool nhỏ hơn: 6 kết nối mỗi tiến trình) sang `pending` 3 lần ở hai bậc nặng nhưng chưa
+lần nào giữ đủ 5 phút để kêu. Ở tải thiết kế, pool một tiến trình đã sát 80%: theo dõi ở test ngâm,
+và là ứng viên đầu tiên khi cần nới (pool lớn hơn cho mỗi tiến trình, vẫn trong `max_connections`).
+
 ---
+*Changelog: 2026-10-08 (lần 2) — kết quả đo.*
+
 *Changelog: 2026-10-08 — tạo mới.*

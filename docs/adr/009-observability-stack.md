@@ -81,6 +81,22 @@ Instrumentation làm chậm chính hệ thống đang đo. Để số liệu tes
 Nếu overhead > 5% thì giảm tỷ lệ lấy mẫu hoặc bỏ bớt span thủ công. Không đo thì không biết
 đang tối ưu cái gì.
 
+> 🔀 **2026-10-08 — đã đo, đã quyết** (chủ dự án). `test_otel_overhead` trên runner CI, chốt đơn
+> 10 đơn/s, đo lặp lại được:
+>
+> | Chế độ | p95 chốt đơn | CPU edge-api |
+> |---|---|---|
+> | Tắt OTel | 12,9 ms | 8,8% |
+> | Trace **10%** + metric | 16,4 ms (+27%, **+3,5 ms**) | 11,8% |
+> | Trace 100% + metric | 33,1 ms (+155%, +20 ms) | 14,8% |
+>
+> **Mặc định lấy mẫu 10%** (`OtelSettings.otel_traces_sampler_arg`, giờ thật sự nối vào
+> `TracerProvider` — trước đó field khai báo mà không ai dùng). Đặt `OTEL_TRACES_SAMPLER_ARG=1.0` khi
+> cần trace đủ để điều tra một sự cố. Mức "5%" ở trên **không đạt được** khi giữ metric: phần còn lại
+> ở 10% là metric + instrumentation, mà observability là Must. Mức chấp nhận thay bằng số tuyệt đối:
+> **+3,5 ms p95** trên ngân sách 500 ms của chốt đơn. Trace 100% ở Central API còn ăn đúng CPU đang là
+> nút thắt (LD-2, [ADR-011](011-central-api-multi-process.md)).
+
 ## Phương án đã xem xét và loại
 
 | Phương án | Vì sao loại |

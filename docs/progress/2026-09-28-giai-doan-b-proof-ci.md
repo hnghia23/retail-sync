@@ -126,50 +126,64 @@ Số đo overhead OTel (đã ấm, lần đo tốt): trace 100% → p95 +116%, C
 p95 ~+27%, CPU ~10,3%. Cả hai đều vượt mức 5% của ADR-009. Phần còn lại ở 10% là metric +
 instrumentation, không tắt được (observability là Must). Vẫn còn chờ quyết định tỉ lệ lấy mẫu.
 
-## 5. Trạng thái (2026-10-08)
+## 4c. Lượt chạy thứ ba (2026-10-08, commit `c2723fe`, đủ 6 artifact) — 5/6 nhóm xanh
 
-**Code:** commit sau `aa42cec` (cục bộ, chờ push): diễn tập khóa bảng, khởi động ấm cho đo OTel, và
-**ADR-011 Central API nhiều tiến trình**. Đã chạy: 286 unit test, lint/mypy/import-linter sạch. **Chưa
-chạy trên Docker:** compose `central-api --workers 4` sẽ được job `scenarios` của CI kiểm khi push.
+**Mọi diễn tập xanh**, kể cả hai diễn tập khóa bảng mới: `rs-db-pool` kêu lần đầu. Lượt này một mình
+đã kích hoạt thử **18 cảnh báo**. Ba cảnh báo còn lại (`rs-circuit-open`, `rs-store-disk`,
+`rs-sync-failure-rate`) đã kêu ở CH-1/CH-4 ngày 2026-09-25 (nhóm `chaos` không nằm trong `all`) →
+**21/21**. `restore` xanh lần thứ ba. Overhead OTel đo lặp lại được (lệch giữa hai lần ≤ 9%).
+
+**`load` đỏ ở đúng một chỗ:** LD-2 bậc 200 cửa hàng, p95 1,56 s. ADR-011 có tác dụng rõ (bảng ở
+[ADR-011 §Kết quả đo](../adr/011-central-api-multi-process.md)): ~136 sự kiện/giây từ 1,08 s xuống
+**0,16 s**, ~273 sự kiện/giây (≈ tải thiết kế) **0,99 s**. Bậc 200 đặt vào **543 sự kiện/giây = 2×
+tải thiết kế**, khi đó runner 4 nhân hết CPU (central-api 2,7 nhân + Postgres 1 nhân + ~30 container).
+Trung tâm vẫn từ chối tử tế (~15 nghìn lô `429`/`503` có `Retry-After`), CONVERGED, 0 mất.
+
+**Chủ dự án quyết (2026-10-08):**
+1. **LD-2 hai vùng tiêu chí** (docs/16 §4): tới tải thiết kế → p95 < 1 s; vượt tải thiết kế → chỉ đòi
+   từ chối tử tế + không mất dữ liệu. Bậc mới: 10 → 50 → **95 (≈ tải thiết kế)** → 200 (≈ 2×). Test đỏ
+   nếu bậc "thiết kế" lệch quá 1,1× hay bậc "quá tải" dưới 1,5× (bộ sinh đổi nhịp thì không âm thầm đo
+   tải khác).
+2. **Trace mặc định 10%** (ADR-009 changelog): p95 chốt đơn +3,5 ms thay vì +20 ms; mức "5%" của
+   ADR-009 thay bằng số tuyệt đối. `OtelSettings` giờ thật sự nối vào `TracerProvider`. Test overhead
+   đo `on` (10%), `full` (100%), `off`.
+
+Số đo thật LD-1/LD-2/LD-4 đã ghi vào [docs/02 §6.1](../02-scale-capacity.md).
+
+## 5. Trạng thái (2026-10-08, sau lượt ba)
+
+**Code:** commit sau `c2723fe` (cục bộ, chờ push): LD-2 hai vùng, trace 10% mặc định, docs. Đã chạy:
+287 unit test, lint/mypy/import-linter sạch. LD-2 tiêu chí mới **chưa chạy**.
 
 **Cổng B** ([06](../06-roadmap.md)):
 
 | Điều kiện | Trạng thái |
 |---|---|
 | CH-1…CH-7 | ✅ (2026-09-25, máy dev) |
-| Cảnh báo đã kích hoạt thử | 🟡 **20/21** — còn `rs-db-pool` (diễn tập khóa bảng mới, chờ chạy) |
+| Cảnh báo đã kích hoạt thử | ✅ **21/21** (18 ở workflow `proof` 2026-10-08 + 3 ở CH-1/CH-4) |
 | Partition tháng sau tự tồn tại | ✅ |
-| Backup + `restore` thật | ✅ (workflow `proof`, 2 lượt) |
-| LD-1 | ✅ p95 chốt đơn 22 ms, bộ giả lập 1% CPU |
+| Backup + `restore` thật | ✅ (workflow `proof`, 3 lượt) |
+| LD-1 | ✅ p95 chốt đơn 22–36 ms, bộ giả lập 2% CPU |
 | LD-4 / 200 kết nối | ✅ chỉ `200`/`503` có `Retry-After`, 0 lỗi |
-| **LD-2** | 🔴 p95 1,08 s ở 127 sự kiện/giây, nghẽn một nhân → ADR-011, **chờ đo lại** |
-| **Overhead OTel** | 🔴 trace 100% +116%, trace 10% ~+27% — **chờ quyết định tỉ lệ lấy mẫu** |
+| **LD-2** | 🟡 tới tải thiết kế p95 0,16–0,99 s; quá tải 2× từ chối tử tế. **Chờ chạy lại với tiêu chí hai vùng** — bậc 95 sát ngưỡng (0,99 s ở 1,05×) |
+| Overhead OTel | ✅ đã đo, đã quyết: trace 10%, +3,5 ms p95 |
 | LD-3, seam 50 triệu dòng ledger | ⏳ cần máy chạy liên tục |
 | DI-1…DI-5 | ⏳ DI-1…3 có trong job `scenarios`; DI-4/5 chưa rà |
 | Test ngâm 72h | ⏳ chạy cuối cùng |
-| Số đo ghi vào docs/02, `git clone` → README | ⏳ |
+| Số đo ghi vào docs/02 | 🟡 LD-1/2/4 ✅ (§6.1); LD-3, seam ⏳ |
+| `git clone` → README | ⏳ |
 
 ## 6. Các bước tiếp theo (theo thứ tự)
 
-**Bước 1 — push, chờ CI thường xanh** (~15 phút). Push `main`. Workflow `CI` tự chạy: `quality`,
-`unit`, `integration`, `scenarios`. Nếu đỏ: dán khoảng 80 dòng cuối của bước đỏ (từ `FAILURES` / `short
-test summary info`). Hoặc cài `gh` (`winget install GitHub.cli` → `gh auth login`) để Claude tự đọc log.
+**Bước 1 — push, chờ CI thường xanh** (~15 phút). Đỏ thì dán ~80 dòng cuối của bước đỏ.
 
-**Bước 2 — chạy lại `proof`, chỉ hai nhóm đỏ** (~2,5 giờ). Actions → **proof (giai đoạn B)** → Run
-workflow → `main`, suite **`drills`**, rồi chạy lần nữa với suite **`load`** (hai lượt song song được).
-Chỉ cần chạy lại riêng một test thì điền `-k` (ví dụ `pool_exhausted`). Xong thì tải artifact về
-`runs/proof-ci/<tên-artifact>/` (xóa lượt cũ trước) và báo Claude đọc. Kỳ vọng:
-- `drills` xanh → **21/21 cảnh báo** đã kích hoạt thử.
-- `load`: overhead OTel đo lặp lại được (test xanh). LD-2 với 4 tiến trình: xem CPU central-api có còn
-  chạm trần không. Còn > 1 s mà CPU central-api KHÔNG chạm trần → nút thắt đã dời (DB, lock), đo tiếp.
-- Artifact giữ 30 ngày.
+**Bước 2 — chạy lại `proof` suite `load`** (~1,2 giờ; các nhóm khác đã xanh trên code này, trừ trace
+10%, nên muốn chắc thì chạy `all`, ~3,5 giờ). Tải artifact về `runs/proof-ci/` rồi báo Claude. Kỳ vọng:
+LD-2 xanh với tiêu chí hai vùng. Trace 10% còn giảm thêm CPU central-api, nên bậc 95 (sát ngưỡng ở lượt
+trước) có dư hơn. Nếu bậc 95 vẫn > 1 s thì đó là kết luận thật: trên máy 4 nhân dùng chung, trung tâm
+chỉ chịu được dưới tải thiết kế. Đo lại khi có VPS (bước 3), không nới thêm tiêu chí.
 
-**Bước 3 — chủ dự án quyết tỉ lệ lấy mẫu trace** (ADR-009: overhead > 5% → giảm). Số hiện có: 100% →
-+116% p95, 10% → ~+27% (phần còn lại là metric, không tắt được). Đặt bằng
-`OTEL_TRACES_SAMPLER=parentbased_traceidratio` + `OTEL_TRACES_SAMPLER_ARG` trong compose và ghi
-changelog ADR-009. Mức 5% của ADR-009 có thể phải sửa thành con số đo được, vì metric luôn tốn phí.
-
-**Bước 4 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
+**Bước 3 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
 được (> 6 giờ hoặc > 14 GB đĩa):
 - **Seam 50 triệu dòng ledger**: `make seam-ledger WORK="runs/bulk-t2-24m-s42/work runs/bulk-t2-extra-s43/work"`
   (dữ liệu đã sinh trên máy dev; VPS thì sinh lại bằng `make sim-bulk`).
@@ -177,8 +191,8 @@ changelog ADR-009. Mức 5% của ADR-009 có thể phải sửa thành con số
   truy vấn lớp C: `make ld3`.
 - Ghi số đo vào docs/02, rà DI-4/DI-5, chạy thử `git clone` → README trên máy sạch.
 
-**Bước 5 — test ngâm 72h** (cuối cùng, sau khi mọi thứ trên xanh): `edge` t0 + `virtual` t1 chạy nền
+**Bước 4 — test ngâm 72h** (cuối cùng, sau khi mọi thứ trên xanh): `edge` t0 + `virtual` t1 chạy nền
 3 ngày, `audit --watch` + nhật ký cảnh báo. Đạt: không rò bộ nhớ, `outbox` không bloat, p95 không trôi,
 `audit` không lần nào `DIVERGED`. Đây là việc duy nhất BẮT BUỘC cần máy chạy liên tục 3 ngày.
 
-Xong cả 5 bước → đánh dấu cổng B trong docs/06 → giai đoạn C ([ADR-010](../adr/010-data-flow-first.md)).
+Xong cả 4 bước → đánh dấu cổng B trong docs/06 → giai đoạn C ([ADR-010](../adr/010-data-flow-first.md)).

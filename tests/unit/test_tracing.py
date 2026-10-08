@@ -13,6 +13,8 @@ suite sai lệch — dùng cổng `OTEL_EXPORTER_OTLP_ENDPOINT` trỏ về một
 
 from __future__ import annotations
 
+import pytest
+
 import shared.tracing as tracing_module
 from shared.config import OtelSettings
 from shared.tracing import inject_trace, instrument_clients, link_from_trace, setup_tracing
@@ -131,3 +133,16 @@ def test_link_from_trace_with_empty_carrier_returns_no_links() -> None:
 def test_link_from_trace_with_garbage_carrier_returns_no_links() -> None:
     """Payload outbox cũ (`trace` rỗng vì tracing từng tắt) không được làm sync worker sập."""
     assert link_from_trace({"traceparent": "khong-phai-w3c-hop-le"}) == []
+
+
+def test_default_sampler_keeps_ten_percent_of_new_traces(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR-009 (2026-10-08): mặc định lấy mẫu 10% trace mới, theo quyết định của đầu gửi khi có
+    `traceparent`. Đặt `OTEL_TRACES_SAMPLER_ARG=1.0` thì về 100% — SDK đọc từ `OtelSettings`."""
+    mp = monkeypatch
+    mp.delenv("OTEL_TRACES_SAMPLER_ARG", raising=False)
+    mp.delenv("OTEL_TRACES_SAMPLER", raising=False)
+    default = tracing_module._sampler(OtelSettings(_env_file=None)).get_description()
+    assert default.startswith("ParentBased{root:TraceIdRatioBased{0.1}")
+    mp.setenv("OTEL_TRACES_SAMPLER_ARG", "1.0")
+    full = tracing_module._sampler(OtelSettings(_env_file=None)).get_description()
+    assert full.startswith("ParentBased{root:TraceIdRatioBased{1.0}")

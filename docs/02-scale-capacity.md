@@ -173,7 +173,30 @@ Docker Compose dùng **profile** để bật/tắt từng phần: `--profile edg
 
 Ghi kết quả thật ngược lại vào doc này, thay cho ước lượng.
 
+### 6.1. Số đo thật — trung tâm dưới tải (LD-2, LD-4, 2026-10-08)
+
+Runner GitHub Actions **4 vCPU / 16 GB, chạy CẢ stack** (~30 container) lẫn bộ giả lập, Central API 4
+tiến trình ([ADR-011](adr/011-central-api-multi-process.md)), trace 10%. Số này **bi quan**: production
+cho trung tâm máy riêng. Chi tiết: [progress](progress/2026-09-28-giai-doan-b-proof-ci.md).
+
+| Tải đặt vào (sự kiện/giây) | So với thiết kế (~260/s, §1) | p95 `POST /events` | CPU central-api / central-db (đỉnh) | Dữ liệu |
+|---|---|---|---|---|
+| 28 | 0,1× | 0,07 s | 22% / 14% | CONVERGED |
+| 136 | 0,5× | 0,16 s | 131% / 36% | CONVERGED |
+| 273 | 1,05× | 0,99 s | 255% / 101% | CONVERGED |
+| 543 | 2,1× | 1,56 s — từ chối ~15 nghìn lô `429`/`503`, đều có `Retry-After` | 267% / 93% | CONVERGED, 0 mất |
+
+- **Điểm gãy trên máy 4 nhân dùng chung: ~tải thiết kế.** Quá đó trung tâm từ chối tử tế, dữ liệu
+  không mất. Một tiến trình Central API (trước ADR-011) gãy từ ~127 sự kiện/giây vì chạm trần một nhân.
+- **Postgres không phải nút thắt:** đỉnh ~1 nhân ở 2× tải thiết kế. Kết luận §2 (Postgres dư) đúng.
+- **Kết nối (LD-4):** 200 client cùng lúc → chỉ `200`/`503`, 0 lỗi. Mở thẳng vào Postgres thì bị chặn ở
+  `max_connections` = 100 (mở được 87) — lý do cửa hàng không bao giờ nói thẳng với DB trung tâm, và
+  ngưỡng PgBouncer phải đứng trước khi thêm tiến trình đọc DB (§3.3).
+- **Một cửa hàng (LD-1):** p95 chốt đơn 22–36 ms ở 2,6 đơn/s, xa ngân sách 500 ms.
+
 ---
+*Changelog: 2026-10-08 — §6.1 số đo thật LD-1/LD-2/LD-4 trên runner CI.*
+
 *Changelog: 2026-09-25 — thêm RAM đo thật cạnh bảng ước lượng.*
 
 *Changelog: 2026-09-23 — §6 trỏ về bộ giả lập và giai đoạn B (ADR-010).*

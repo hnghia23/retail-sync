@@ -10,7 +10,7 @@ parent-child sẽ tạo span dài vô nghĩa, nên đầu nhận dùng **span li
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from shared.config import OtelSettings
 
@@ -27,6 +27,28 @@ if TYPE_CHECKING:
 # báo — đã xác minh hành vi này bằng thực nghiệm trước khi viết đoạn code này.
 _tracing_initialized = False
 _clients_instrumented = False
+
+
+def _sampler(cfg: OtelSettings) -> Any:
+    """Bộ lấy mẫu từ `OtelSettings` (cùng tên biến chuẩn OTel). Trước 2026-10-08 hai field này
+    khai báo mà không ai dùng — SDK tự đọc biến môi trường, nên mặc định trong code là chữ chết.
+    `parentbased_*`: request có `traceparent` đã lấy mẫu ở đầu kia thì đi theo quyết định đó."""
+    from opentelemetry.sdk.trace.sampling import (
+        ALWAYS_OFF,
+        ALWAYS_ON,
+        ParentBased,
+        TraceIdRatioBased,
+    )
+
+    ratio = TraceIdRatioBased(cfg.otel_traces_sampler_arg)
+    return {
+        "always_on": ALWAYS_ON,
+        "always_off": ALWAYS_OFF,
+        "traceidratio": ratio,
+        "parentbased_always_on": ParentBased(ALWAYS_ON),
+        "parentbased_always_off": ParentBased(ALWAYS_OFF),
+        "parentbased_traceidratio": ParentBased(ratio),
+    }[cfg.otel_traces_sampler]
 
 
 def setup_tracing(service_name: str, *, settings: OtelSettings | None = None) -> None:
@@ -52,7 +74,7 @@ def setup_tracing(service_name: str, *, settings: OtelSettings | None = None) ->
     from shared.metrics import resource_attributes
 
     resource = Resource.create(resource_attributes(service_name))
-    provider = TracerProvider(resource=resource)
+    provider = TracerProvider(resource=resource, sampler=_sampler(cfg))
     provider.add_span_processor(
         BatchSpanProcessor(
             OTLPSpanExporter(endpoint=f"{cfg.otel_exporter_otlp_endpoint}/v1/traces")
