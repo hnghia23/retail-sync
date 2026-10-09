@@ -153,8 +153,13 @@ Số đo thật LD-1/LD-2/LD-4 đã ghi vào [docs/02 §6.1](../02-scale-capacit
 ## 4d. Lượt chạy thứ tư (2026-10-08, commit `a209c2d`) — 6/7 job xanh
 
 **`load` xanh lần đầu:** LD-1, LD-2 (tiêu chí hai vùng, trace 10% mặc định), LD-4, overhead OTel. Số
-đo chi tiết của lượt này chưa đọc (artifact `proof-load` chưa tải về); §6.1 của docs/02 vẫn là số của
-lượt ba. `restore` và ba diễn tập dài xanh.
+đo trên cấu hình chốt đã ghi vào [docs/02 §6.1](../02-scale-capacity.md): **ở tải thiết kế (259 sự
+kiện/giây) p95 0,82 s**, 2× thì 1,29 s và từ chối tử tế; trace 10% cộng thêm 3,2 ms vào p95 chốt đơn.
+Trace 10% còn gỡ thêm CPU cho central-api: bậc 136/s từ 0,16 s (lượt ba) xuống 0,07 s. `restore` và ba
+diễn tập dài xanh.
+
+Lưu ý nhỏ: `rs-central-pg-conn` kêu lúc 09:19:30 (LD-4), nhưng job kết thúc trước khi thông báo kịp tới
+`alert-sink`. LD-4 không kiểm thông báo, và lượt ba đã có đủ cả hai phía cho rule này.
 
 **`drills` đỏ ở 2 test, cả hai XANH ở lượt ba — test chập chờn, không phải hồi quy:**
 
@@ -181,12 +186,12 @@ test, lint/mypy/import-linter sạch.
 | Backup + `restore` thật | ✅ (workflow `proof`, 3 lượt) |
 | LD-1 | ✅ p95 chốt đơn 22–36 ms, bộ giả lập 2% CPU |
 | LD-4 / 200 kết nối | ✅ chỉ `200`/`503` có `Retry-After`, 0 lỗi |
-| LD-2 | ✅ tiêu chí hai vùng đạt (workflow `proof` 2026-10-08, lượt bốn). Số đo chi tiết: tải artifact `proof-load` để ghi vào docs/02 §6.1 |
+| LD-2 | ✅ tiêu chí hai vùng đạt (lượt bốn): tải thiết kế p95 0,82 s; 2× từ chối tử tế, 0 mất |
 | Overhead OTel | ✅ đã đo, đã quyết: trace 10%, +3,5 ms p95 |
 | LD-3, seam 50 triệu dòng ledger | ⏳ cần máy chạy liên tục |
 | DI-1…DI-5 | ⏳ DI-1…3 có trong job `scenarios`; DI-4/5 chưa rà |
 | Test ngâm 72h | ⏳ chạy cuối cùng |
-| Số đo ghi vào docs/02 | 🟡 LD-1/2/4 ✅ (§6.1); LD-3, seam ⏳ |
+| Số đo ghi vào docs/02 | 🟡 LD-1/2/4 ✅ (§6.1, cấu hình chốt); LD-3, seam ⏳ |
 | `git clone` → README | ⏳ |
 
 ## 6. Các bước tiếp theo (theo thứ tự)
@@ -194,8 +199,7 @@ test, lint/mypy/import-linter sạch.
 **Bước 1 — push, chờ CI thường xanh** (~15 phút). Đỏ thì dán ~80 dòng cuối của bước đỏ.
 
 **Bước 2 — chạy lại `proof` suite `drills`** (~2,5 giờ). Kỳ vọng xanh: hai test đã sửa ở §4d. Tải
-artifact `proof-drills` **và `proof-load` của lượt bốn** (chưa có số LD-2 tiêu chí mới trong docs) về
-`runs/proof-ci/`, báo Claude ghi số. Sau bước này, phần chạy được trên runner của cổng B là xong.
+artifact `proof-drills` về `runs/proof-ci/`, báo Claude ghi kết quả. Sau bước này, phần chạy được trên runner của cổng B là xong.
 
 **Bước 3 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
 được (> 6 giờ hoặc > 14 GB đĩa):

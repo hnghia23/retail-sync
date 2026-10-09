@@ -96,6 +96,9 @@ Nếu overhead > 5% thì giảm tỷ lệ lấy mẫu hoặc bỏ bớt span th�
 > ở 10% là metric + instrumentation, mà observability là Must. Mức chấp nhận thay bằng số tuyệt đối:
 > **+3,5 ms p95** trên ngân sách 500 ms của chốt đơn. Trace 100% ở Central API còn ăn đúng CPU đang là
 > nút thắt (LD-2, [ADR-011](011-central-api-multi-process.md)).
+>
+> Đo lại sau khi đặt mặc định (lượt `proof` 2026-10-08, commit `a209c2d`): tắt 12,4 ms · **10%: 15,7 ms
+> (+3,2 ms)**, CPU 11,3% · 100%: 31,0 ms (+18,6 ms), CPU 14,4%. Khớp số lúc quyết định.
 
 ## Phương án đã xem xét và loại
 
