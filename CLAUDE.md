@@ -23,7 +23,7 @@ muốn **xong B rồi mới chạy test ngâm 72h**, và **không muốn máy c�
 LD-1/2/4, `restore` thật chạy bằng **workflow `proof`** trên GitHub Actions (bấm tay, mỗi nhóm một runner,
 ≤ 6 giờ — [nhật ký](docs/progress/2026-09-28-giai-doan-b-proof-ci.md), **đọc §5 trạng thái + §6 các bước
 tiếp theo**). 2026-10-08: **cảnh báo 21/21** ✅, `restore` thật ✅, LD-1/LD-4 ✅, **trace mặc định 10%**
-(ADR-009); LD-2 sau ADR-011 đạt ≈ tải thiết kế, tiêu chí hai vùng (tới / vượt tải thiết kế) chờ chạy lại. Còn cần máy chạy liên tục: LD-3, seam 50 triệu dòng ledger, test ngâm.
+(ADR-009); **LD-2 ✅** (ADR-011 + tiêu chí hai vùng tới / vượt tải thiết kế). Còn cần máy chạy liên tục: LD-3, seam 50 triệu dòng ledger, test ngâm.
 
 ## 🔀 Hướng phát triển hiện tại (chủ dự án, 2026-09-23) — [ADR-010](docs/adr/010-data-flow-first.md)
 
@@ -105,8 +105,9 @@ scale → **C** tính năng. Không qua cổng thì không sang giai đoạn sau
   (quy tắc ở [data_platform/README.md](data_platform/README.md)). (5) Bộ giả lập: `5xx` ở chốt đơn =
   "không rõ kết cục". (6) `simulator bulk` ghi prefix `bronze/bulk-<profile>` + DB `dw_bulk`, KHÔNG BAO
   GIỜ `bronze/central`. (7) Test hỗn loạn/diễn tập/tải OPT-IN (`RETAIL_SYNC_CHAOS|ALERT_DRILLS|LOAD=1`),
-  gây sự cố thật trên stack dev. `docker update --cpus 0` KHÔNG gỡ giới hạn CPU — đặt lại bằng số CPU
-  của máy ảo. (8) Webhook Grafana không có uid rule trong nhãn — `alert-sink` lấy từ `generatorURL`.
+  gây sự cố thật trên stack dev. Diễn tập "DB chậm" dùng KHÓA BẢNG từng nhịp, không bóp CPU (bóp CPU cho
+  kết quả phụ thuộc máy: lượt xanh lượt đỏ). Chờ tín hiệu bất đồng bộ (thông báo, metric) thì hỏi LẶP LẠI,
+  không ngủ cố định rồi hỏi một lần. (8) Webhook Grafana không có uid rule trong nhãn — `alert-sink` lấy từ `generatorURL`.
   (9) Heartbeat là UPSERT `store_sync_status` — cửa hàng chưa từng bán phải hiện ra với `rs-store-silent`.
   (10) Mốc ngày có thể trước 1970 (`1970-01-01 - 7`) thì tính ở PYTHON và kẹp — `toDate32` KHÔNG đủ khi
   so với cột `Date` (ClickHouse ép hằng về `Date` → tràn thành 2149; bộ giám sát từng báo "0 đơn chờ dbt"

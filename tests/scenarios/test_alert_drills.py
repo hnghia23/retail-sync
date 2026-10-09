@@ -56,8 +56,17 @@ pytestmark = pytest.mark.skipif(
 
 async def _expect(uid: str, *, within: float) -> dict[str, Any]:
     fired = await wait_alert(uid, within=within)
-    await asyncio.sleep(20)  # group_wait 10 s của contact point
-    notified = await asyncio.to_thread(notified_by_sink, uid)
+    notified = False
+    if fired is not None:
+        # Hỏi `alert-sink` LẶP LẠI. Bản đầu ngủ cố định 20 s rồi hỏi MỘT lần — Grafana gửi thông báo
+        # 10–30 s sau khi rule kêu (group_wait + chu kỳ đánh giá), nên thỉnh thoảng hỏi trước khi
+        # thông báo tới 3 giây (workflow `proof` 2026-10-08: `rs-reconcile-full` tới lúc 08:12:26,
+        # test hỏi lúc ~08:12:23).
+        deadline = time.monotonic() + 120
+        while not (notified := await asyncio.to_thread(notified_by_sink, uid)):
+            if time.monotonic() > deadline:
+                break
+            await asyncio.sleep(5)
     return {"uid": uid, "fired_after_seconds": fired, "notified": notified}
 
 
@@ -83,13 +92,6 @@ def _psql(stack: Stack, sql: str) -> str:
         "exec", container_of("central-db"), "psql", "-U", e.get("CENTRAL_DB_USER", "central_app"),
         "-d", "central", "-Atc", sql,
     )  # fmt: skip
-
-
-def _unthrottle(name: str) -> None:
-    """Gỡ giới hạn CPU. `docker update --cpus 0` KHÔNG gỡ (giữ nguyên giới hạn cũ — lần diễn tập
-    đầu để DB store-002 bị bóp 5% CPU sau khi xong): đặt bằng đúng số CPU của máy ảo Docker."""
-    ncpu = docker("info", "--format", "{{.NCPU}}").strip() or "8"
-    docker("update", "--cpus", ncpu, name)
 
 
 def _assert_all(results: list[dict[str, Any]]) -> None:
@@ -302,6 +304,14 @@ def _release_outbox_lock(stack: Stack, store: str) -> None:
     )  # fmt: skip
 
 
+async def _pulse_lock(cmd: list[str], stop: asyncio.Event, *, pause: float = 1.0) -> None:
+    """Chạy lặp `cmd` (một lượt giữ khóa vài giây) cách nhau `pause` giây tới khi `stop`: ghi
+    chậm ĐỀU, vẫn hoàn tất — đúng "DB chậm", không phải "DB treo"."""
+    while not stop.is_set():
+        await asyncio.to_thread(subprocess.run, cmd, capture_output=True, timeout=60, check=False)
+        await asyncio.sleep(pause)
+
+
 # Bản đầu của hai diễn tập dưới bóp CPU Postgres cửa hàng (`docker update --cpus`). Kết quả phụ
 # thuộc tốc độ máy: 5% CPU thì runner CI theo kịp (p95 lượn quanh 500 ms), 2% thì Postgres không mở
 # nổi kết nối overflow mới → pool kẹt ~10/20 = 50% và metric edge-api gần như không có điểm đo
@@ -354,16 +364,7 @@ async def test_drill_slow_store_database(stack: Stack) -> None:
     )  # fmt: skip
     await asyncio.sleep(15)
     stop = asyncio.Event()
-
-    async def pulse() -> None:
-        while not stop.is_set():
-            await asyncio.to_thread(
-                subprocess.run, _edge_psql(stack, store, _outbox_lock_sql(2)),
-                capture_output=True, timeout=60, check=False,
-            )  # fmt: skip
-            await asyncio.sleep(1)
-
-    pulser = asyncio.create_task(pulse())
+    pulser = asyncio.create_task(_pulse_lock(_edge_psql(stack, store, _outbox_lock_sql(2)), stop))
     try:
         result = await _expect("rs-sales-p95", within=900)
     finally:
@@ -379,31 +380,44 @@ async def test_drill_slow_store_database(stack: Stack) -> None:
 
 
 async def test_drill_slow_central_database(stack: Stack) -> None:
-    """rs-ingest-p95 + rs-store-lag: Postgres trung tâm bị bóp còn 5% CPU dưới tải của 20 cửa
-    hàng ảo đẩy lịch sử (occurred_at vài ngày trước → trễ đồng bộ > 15 phút là THẬT).
+    """rs-ingest-p95 + rs-store-lag: ghi ở Postgres trung tâm chậm từng nhịp (khóa `processed_event`
+    3 s, nhả 1 s — mọi sự kiện đều ghi khóa idempotency vào đó) dưới tải của 20 cửa hàng ảo đẩy lịch
+    sử (occurred_at vài ngày trước → trễ đồng bộ > 15 phút là THẬT).
 
-    Bản đầu (10% CPU, 5 cửa hàng) chỉ kêu được `rs-store-lag` trên runner CI: 5 cửa hàng gửi tuần
-    tự không bao giờ giữ đủ lô đồng thời để p95 vượt 1 s (workflow `proof` 2026-09-28)."""
+    Hai bản đầu bóp CPU Postgres (10% rồi 5%): p95 lượn quanh 1 s, lượt xanh lượt đỏ. Sau ADR-011
+    trung tâm 4 tiến trình trả `503` NHANH nhiều hơn, kéo p95 xuống thêm (workflow `proof`
+    2026-10-08: 25 phút `pending` ↔ `inactive`). Khóa từng nhịp cho mọi lô ĐƯỢC NHẬN chậm ~1,5–3 s
+    trên mọi máy."""
     from simulator.__main__ import main as simulator
 
     keys = ROOT / "runs" / "virtual-keys.env"
-    db = container_of("central-db")
-    docker("update", "--cpus", "0.05", db)
+    e = stack.env
+    sql = "BEGIN; LOCK TABLE processed_event IN EXCLUSIVE MODE; SELECT pg_sleep(3); COMMIT;"
+    lock = ["docker", "exec", container_of("central-db"), "psql", "-U",
+            e.get("CENTRAL_DB_USER", "central_app"), "-d", "central", "-Atc", sql]  # fmt: skip
+    run = asyncio.create_task(
+        asyncio.to_thread(
+            simulator,
+            ["run", "--mode", "virtual", "--profile", "t2", "--keys", str(keys),
+             "--stores", "20", "--days", "2", "--rate", "90", "--seed", "92",
+             "--central", stack.central_url, "--drain-timeout", "1800"],
+        )
+    )  # fmt: skip
+    stop = asyncio.Event()
+    pulser = asyncio.create_task(_pulse_lock(lock, stop))
     try:
-        run = asyncio.create_task(
-            asyncio.to_thread(
-                simulator,
-                ["run", "--mode", "virtual", "--profile", "t2", "--keys", str(keys),
-                 "--stores", "20", "--days", "2", "--rate", "90", "--seed", "92",
-                 "--central", stack.central_url, "--drain-timeout", "1800"],
-            )
-        )  # fmt: skip
         results = [
             await _expect("rs-store-lag", within=1200),
             await _expect("rs-ingest-p95", within=1200),
         ]
     finally:
-        _unthrottle(db)
+        stop.set()
+        await pulser
+        _psql(
+            stack,
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+            " WHERE query LIKE '%LOCK TABLE processed_event%' AND pid <> pg_backend_pid()",
+        )
     code = await run
     report("alerts", "drill-slow-central", {"results": results, "simulator_exit": code})
     _assert_all(results)

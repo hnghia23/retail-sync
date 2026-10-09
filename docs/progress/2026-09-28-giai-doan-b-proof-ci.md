@@ -150,10 +150,26 @@ Trung tâm vẫn từ chối tử tế (~15 nghìn lô `429`/`503` có `Retry-Af
 
 Số đo thật LD-1/LD-2/LD-4 đã ghi vào [docs/02 §6.1](../02-scale-capacity.md).
 
-## 5. Trạng thái (2026-10-08, sau lượt ba)
+## 4d. Lượt chạy thứ tư (2026-10-08, commit `a209c2d`) — 6/7 job xanh
 
-**Code:** commit sau `c2723fe` (cục bộ, chờ push): LD-2 hai vùng, trace 10% mặc định, docs. Đã chạy:
-287 unit test, lint/mypy/import-linter sạch. LD-2 tiêu chí mới **chưa chạy**.
+**`load` xanh lần đầu:** LD-1, LD-2 (tiêu chí hai vùng, trace 10% mặc định), LD-4, overhead OTel. Số
+đo chi tiết của lượt này chưa đọc (artifact `proof-load` chưa tải về); §6.1 của docs/02 vẫn là số của
+lượt ba. `restore` và ba diễn tập dài xanh.
+
+**`drills` đỏ ở 2 test, cả hai XANH ở lượt ba — test chập chờn, không phải hồi quy:**
+
+| Test | Nguyên nhân | Sửa (2026-10-09) |
+|---|---|---|
+| `drift` — "`rs-reconcile-full` không tới alert-sink" | Thông báo CÓ tới (08:12:26), nhưng `_expect` ngủ cố định 20 s rồi hỏi `alert-sink` đúng MỘT lần (~08:12:23). Grafana gửi 10–30 s sau khi rule kêu | `_expect` hỏi lặp lại mỗi 5 s, tối đa 2 phút |
+| `slow_central` — `rs-ingest-p95` không kêu | Bóp CPU Postgres trung tâm cho p95 lượn quanh 1 s (25 phút `pending` ↔ `inactive`). Sau ADR-011, trung tâm trả `503` NHANH nhiều hơn, kéo p95 xuống | Giống DB cửa hàng: **khóa từng nhịp** bảng `processed_event` (3 s khóa / 1 s nhả, mọi sự kiện đều ghi vào đó). Không còn diễn tập nào bóp CPU |
+
+Bài học chung: **gây sự cố bằng bóp CPU cho kết quả phụ thuộc máy.** Mọi diễn tập "DB chậm" giờ dùng
+khóa bảng, và mọi phép chờ tín hiệu bất đồng bộ (thông báo, metric) phải hỏi lặp lại, không ngủ cố định.
+
+## 5. Trạng thái (2026-10-09, sau lượt bốn)
+
+**Code:** commit sau `a209c2d` (cục bộ, chờ push): sửa 2 diễn tập chập chờn (§4d). Đã chạy: 287 unit
+test, lint/mypy/import-linter sạch.
 
 **Cổng B** ([06](../06-roadmap.md)):
 
@@ -165,7 +181,7 @@ Số đo thật LD-1/LD-2/LD-4 đã ghi vào [docs/02 §6.1](../02-scale-capacit
 | Backup + `restore` thật | ✅ (workflow `proof`, 3 lượt) |
 | LD-1 | ✅ p95 chốt đơn 22–36 ms, bộ giả lập 2% CPU |
 | LD-4 / 200 kết nối | ✅ chỉ `200`/`503` có `Retry-After`, 0 lỗi |
-| **LD-2** | 🟡 tới tải thiết kế p95 0,16–0,99 s; quá tải 2× từ chối tử tế. **Chờ chạy lại với tiêu chí hai vùng** — bậc 95 sát ngưỡng (0,99 s ở 1,05×) |
+| LD-2 | ✅ tiêu chí hai vùng đạt (workflow `proof` 2026-10-08, lượt bốn). Số đo chi tiết: tải artifact `proof-load` để ghi vào docs/02 §6.1 |
 | Overhead OTel | ✅ đã đo, đã quyết: trace 10%, +3,5 ms p95 |
 | LD-3, seam 50 triệu dòng ledger | ⏳ cần máy chạy liên tục |
 | DI-1…DI-5 | ⏳ DI-1…3 có trong job `scenarios`; DI-4/5 chưa rà |
@@ -177,11 +193,9 @@ Số đo thật LD-1/LD-2/LD-4 đã ghi vào [docs/02 §6.1](../02-scale-capacit
 
 **Bước 1 — push, chờ CI thường xanh** (~15 phút). Đỏ thì dán ~80 dòng cuối của bước đỏ.
 
-**Bước 2 — chạy lại `proof` suite `load`** (~1,2 giờ; các nhóm khác đã xanh trên code này, trừ trace
-10%, nên muốn chắc thì chạy `all`, ~3,5 giờ). Tải artifact về `runs/proof-ci/` rồi báo Claude. Kỳ vọng:
-LD-2 xanh với tiêu chí hai vùng. Trace 10% còn giảm thêm CPU central-api, nên bậc 95 (sát ngưỡng ở lượt
-trước) có dư hơn. Nếu bậc 95 vẫn > 1 s thì đó là kết luận thật: trên máy 4 nhân dùng chung, trung tâm
-chỉ chịu được dưới tải thiết kế. Đo lại khi có VPS (bước 3), không nới thêm tiêu chí.
+**Bước 2 — chạy lại `proof` suite `drills`** (~2,5 giờ). Kỳ vọng xanh: hai test đã sửa ở §4d. Tải
+artifact `proof-drills` **và `proof-load` của lượt bốn** (chưa có số LD-2 tiêu chí mới trong docs) về
+`runs/proof-ci/`, báo Claude ghi số. Sau bước này, phần chạy được trên runner của cổng B là xong.
 
 **Bước 3 — máy chạy liên tục** (VPS ARM ~16 GB, hoặc máy dev lúc rảnh), cho những gì runner không làm
 được (> 6 giờ hoặc > 14 GB đĩa):
